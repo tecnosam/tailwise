@@ -1,0 +1,375 @@
+openapi: 3.0.3
+info:
+  title: Tailwise inference engine
+  version: 0.3.0
+  description: |
+    Decides which LLM agent traces are worth keeping for review. Each trace is
+    rendered into a state string, scored by a System One decision model (Jev by default), and passed
+    through a keep/drop policy. Kept traces are exported to Arize Phoenix.
+
+    `POST /v1/traces` stores the trace in a NATS JetStream queue; a worker
+    pool scores it afterwards. `POST /v1/traces:score` skips the queue and
+    returns the decision directly.
+
+    This document covers the JSON API on port 8080. The engine also accepts
+    traces as OpenTelemetry spans through the standard OTLP receivers: gRPC
+    on port 4317 and HTTP on port 4318 (`POST /v1/traces`, protobuf or JSON).
+    Those follow the OTLP specification and are not described here.
+servers:
+  - url: /
+    description: This server
+tags:
+  - name: traces
+    description: Submit agent traces for a keep/drop decision
+  - name: health
+    description: Liveness and readiness
+paths:
+  /v1/traces:
+    post:
+      tags: [traces]
+      operationId: enqueueTrace
+      summary: Queue a trace
+      description: |
+        Validates the trace and stores it in the JetStream work queue. The 202
+        is sent only after the queue has confirmed the trace, so an accepted
+        trace survives a restart of the engine.
+
+        A worker scores it afterwards: the decision is written to the engine's
+        log and kept traces are exported to Phoenix. Delivery is at least
+        once, so a trace can occasionally be scored twice.
+
+        If the model is unavailable (down, timing out, answering 5xx) the trace is
+        not given a fallback decision. It is redelivered with a delay and,
+        after `queue.max_deliver` attempts, moved to the dead-letter stream.
+      requestBody:
+        $ref: "#/components/requestBodies/Trace"
+      responses:
+        "202":
+          description: The trace is stored in the queue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Accepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "503":
+          description: |
+            The trace was not queued: the queue is at `queue.max_messages`, or
+            NATS could not be reached. Retry later.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+                example: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                full:
+                  summary: Queue at its limit
+                  value:
+                    error: queue full, retry later
+                unavailable:
+                  summary: NATS unreachable
+                  value:
+                    error: queue unavailable, retry later
+  /v1/traces:score:
+    post:
+      tags: [traces]
+      operationId: scoreTrace
+      summary: Score a trace synchronously
+      description: |
+        Runs the same pipeline as the queue workers, without the queue, and
+        returns the decision. Meant for testing and demos. If the trace is
+        kept, the export is flushed before the response is sent.
+
+        If the model cannot be reached after its retries the request still succeeds:
+        the decision is a random keep at the `random_floor` rate with reason
+        `fallback`, and `p_keep` is null.
+      requestBody:
+        $ref: "#/components/requestBodies/Trace"
+      responses:
+        "200":
+          description: The decision for the trace.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Decision"
+              examples:
+                keep:
+                  summary: Kept by the model
+                  value:
+                    trace_id: wrong-river-001
+                    decision: keep
+                    p_keep: 0.98
+                    rule: above_threshold
+                    reason: The final answer contradicts the evidence the agent gathered.
+                    cause: contradicts_evidence
+                    model: jev-latest
+                    latency_ms: 78.5
+                    exported: true
+                drop:
+                  summary: Dropped
+                  value:
+                    trace_id: 7f3a91c2e8
+                    decision: drop
+                    p_keep: 0.04
+                    rule: below_threshold
+                    reason: The final answer is correct, complete and supported by the evidence.
+                    cause: correct
+                    model: jev-latest
+                    latency_ms: 26
+                    exported: false
+                fallback:
+                  summary: Model unreachable
+                  value:
+                    trace_id: wrong-river-001
+                    decision: drop
+                    p_keep: null
+                    rule: fallback
+                    reason: The model could not score this trace, so it was dropped at random.
+                    model: jev-latest
+                    latency_ms: 7512.4
+                    exported: false
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+  /healthz:
+    get:
+      tags: [health]
+      operationId: healthz
+      summary: Liveness
+      description: Returns 200 whenever the process is up, whether or not the model and NATS are reachable.
+      responses:
+        "200":
+          description: The process is up.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+              example:
+                status: ok
+  /readyz:
+    get:
+      tags: [health]
+      operationId: readyz
+      summary: Readiness
+      description: |
+        Returns 200 only if the connection to NATS is up and the model server
+        answers a cheap probe within 2 seconds without refusing the API key
+        (401 or 403).
+      responses:
+        "200":
+          description: NATS and the model are reachable, and the model accepts the API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+              example:
+                status: ready
+        "503":
+          description: The queue or a decision model is not reachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+              example:
+                status: unavailable
+                error: "model is not reachable: model jev-latest (default): connection refused"
+components:
+  requestBodies:
+    Trace:
+      required: true
+      description: One agent trace. The body is parsed as JSON whatever its Content-Type.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Trace"
+          examples:
+            wrong_answer:
+              summary: An answer the evidence does not support
+              value:
+                trace_id: wrong-river-001
+                question: Which river flows through the capital of the country where the Eiffel Tower is?
+                tool_calls:
+                  - name: search
+                    args: {query: Eiffel Tower location}
+                    status: ok
+                  - name: search
+                    args: {query: rivers in Lyon}
+                    status: ok
+                evidence:
+                  - The Eiffel Tower is a wrought-iron tower in Paris, France.
+                  - Lyon sits at the confluence of the Rhône and Saône rivers.
+                final_answer: The Rhône flows through the capital, Lyon.
+            correct_answer:
+              summary: A supported answer
+              value:
+                trace_id: 7f3a91c2e8
+                question: Which river flows through the capital of France?
+                tool_calls:
+                  - name: search
+                    args: {query: capital of France}
+                    status: ok
+                evidence:
+                  - Paris is the capital of France.
+                  - The Seine flows through Paris.
+                final_answer: The Seine
+            minimal:
+              summary: Only the required fields
+              value:
+                question: What is 2 + 2?
+                final_answer: "4"
+  responses:
+    BadRequest:
+      description: The body is not valid JSON or a required field is missing.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: final_answer is required
+    TooLarge:
+      description: The request body is larger than 8 MiB.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: request body too large
+  schemas:
+    Trace:
+      type: object
+      required: [question, final_answer]
+      properties:
+        trace_id:
+          type: string
+          description: Your identifier for the trace. If omitted, the engine generates 32 hex characters.
+          example: 7f3a91c2e8
+        agent:
+          type: string
+          maxLength: 128
+          description: |
+            The agent the trace came from. It picks the model that scores
+            the trace (agents.models in the config); an agent with no model
+            of its own, or no agent, gets the default model.
+          example: support-bot
+        question:
+          type: string
+          minLength: 1
+          description: The user's question to the agent.
+        tool_calls:
+          type: array
+          description: Tool calls the agent made, in order.
+          items:
+            $ref: "#/components/schemas/ToolCall"
+        evidence:
+          type: array
+          description: |
+            Evidence the agent gathered. Only the first 3 items, each cut to
+            1500 characters, are shown to the model; all of them are exported.
+          items:
+            type: string
+        final_answer:
+          type: string
+          description: The agent's final answer. Send an empty string for a run that ended without an answer; it is still scored.
+    ToolCall:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          example: search
+        args:
+          description: The call's arguments. Any JSON value, usually an object or a string.
+          example: {query: capital of France}
+        status:
+          type: string
+          description: Outcome of the call.
+          default: ok
+          example: ok
+    Accepted:
+      type: object
+      required: [trace_id]
+      properties:
+        trace_id:
+          type: string
+          description: The trace's ID, generated if the request had none.
+          example: c68863b8105c8e95f34eba6666e18d91
+    Decision:
+      type: object
+      required: [trace_id, agent, decision, p_keep, rule, reason, model, latency_ms, exported]
+      properties:
+        trace_id:
+          type: string
+        agent:
+          type: string
+          description: The trace's agent, empty if it named none.
+        decision:
+          type: string
+          enum: [keep, drop]
+        p_keep:
+          type: number
+          format: double
+          nullable: true
+          minimum: 0
+          maximum: 1
+          description: The model's probability that the final answer is wrong. Null on fallback.
+        rule:
+          type: string
+          enum: [above_threshold, random_floor, below_threshold, fallback]
+          description: |
+            Which part of the policy decided:
+            - `above_threshold`: kept because `p_keep` reached the keep threshold
+            - `random_floor`: below the threshold, kept as a random sample
+            - `below_threshold`: below the threshold and not sampled; dropped
+            - `fallback`: the model could not score it; kept or dropped at random
+        reason:
+          type: string
+          description: >-
+            Why the model thinks the final answer is wrong, or that it is
+            right, in plain English: the description of the cause it chose
+            for the reason question (`scorer.reason_question`). When the
+            manifest asks none, a sentence saying how likely the answer is
+            wrong; on fallback, that the model could not score the trace.
+          example: The final answer contradicts the evidence the agent gathered.
+        cause:
+          type: string
+          description: >-
+            The model's short name for the reason, one of the reason
+            question's options, e.g. `contradicts_evidence` or `correct`.
+            Omitted when the model gave none.
+          example: contradicts_evidence
+        model:
+          type: string
+          description: The model that scored the trace.
+          example: jev-latest
+        latency_ms:
+          type: number
+          format: double
+          description: The model's reported latency, or the measured time if it reported none or on fallback.
+        exported:
+          type: boolean
+          description: The trace was kept and queued for export to at least one back end, which receives it moments later. A failed send is retried and dead-lettered after max_deliver tries.
+    Status:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, ready, unavailable]
+        error:
+          type: string
+          description: Why the server is not ready.
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string

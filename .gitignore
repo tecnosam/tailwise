@@ -31,3 +31,10 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Tailwise
+bin/
+/tailwise
+__pycache__/
+.release-*.md
+.DS_Store

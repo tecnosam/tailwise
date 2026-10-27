@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=./tailwise.schema.yaml
+# A local test config for the Tailwise engine: make run CONFIG=tailwise.yaml.
+# It is not a default: without -config the engine runs on its built-in
+# defaults. Every key is optional; tailwise.schema.yaml describes each one,
+# its type, built-in default and limits. Scoring uses Jev: export JEV_API_KEY.
+
+server:
+  addr: ":8080"
+  workers: 8             # concurrent workers pulling traces from the queue
+  shutdown_timeout: 30s  # time allowed for in-flight traces on shutdown
+
+# The work queue between the receivers and the workers, the span store and
+# the export queues, all in NATS JetStream. With url empty the engine runs
+# its own NATS server inside the process: nothing else to run, but engines
+# cannot share the work, and without store_dir it is lost on restart. Set
+# url to use an external NATS server.
+queue:
+  url: ""                           # env: TAILWISE_NATS_URL, e.g. nats://localhost:4222
+  store_dir: ""                     # embedded NATS only: "" is a temp dir, lost on restart
+  connect_timeout: 30s              # how long to wait for NATS at start-up
+  # Names every stream, subject and consumer: TAILWISE_TRACES, tailwise.traces,
+  # tailwise-workers, ... Engines with the same prefix share the work.
+  prefix: tailwise
+  max_messages: 100000              # queued traces before the API returns 503
+  ack_wait: 2m                      # a worker's time limit per trace before redelivery
+  # System errors (Kev down, timing out, 5xx): the trace is redelivered with
+  # these delays, and dead-lettered after max_deliver attempts.
+  max_deliver: 5
+  redelivery_backoff: [5s, 30s, 2m, 5m]
+  dlq_max_age: 168h                 # how long dead letters are kept
+  replicas: 1                       # copies of each stream on a NATS cluster; 3 on three servers
+  # auth:                           # a secured NATS: one of these
+  #   credentials_file: nats.creds  # or nkey_seed_file, user + password_env, token_env
+  # tls:
+  #   ca_file: ca.pem               # cert_file + key_file for mutual TLS
+
+# OpenTelemetry receivers. Spans are stored by trace ID, assembled
+# into a trace once it goes quiet, then scored like any other trace.
+otlp:
+  grpc_addr: ":4317"                # env: TAILWISE_OTLP_GRPC_ADDR; "" turns gRPC off
+  http_addr: ":4318"                # env: TAILWISE_OTLP_HTTP_ADDR; POST /v1/traces
+  idle_timeout: 10s                 # no spans for this long: the trace is complete
+  max_wait: 2m                      # assemble anyway this long after the first span
+  assemblers: 4
+  span_max_age: 1h                  # spans never assembled are removed after this
+
+scorer:
+  kind: jev                                      # TypeSafe's hosted Jev; any other System One model works too
+  # api_key_env: JEV_API_KEY                     # env var holding the key; JEV_API_KEY is the default for jev
+  endpoint: https://api.typesafe.ai/v1/systemone # env: TAILWISE_SCORER_ENDPOINT
+  model: jev-latest
+  # Questions written for your agent. Without a manifest the built-in
+  # questions are used, and the engine warns at start-up.
+  # Relative paths resolve against this file's directory. env: TAILWISE_MANIFEST
+  # manifest: manifests/my-agent.json
+  decision_question: answer_wrong
+  reason_question: why_wrong   # a choice question; the option chosen is the plain-English reason
+  timeout: 30s           # per call
+  # Retries on the synchronous endpoint only. A queued trace makes one call
+  # per delivery and the queue redelivers it (max_deliver, redelivery_backoff).
+  max_retries: 3
+  backoff: [1s, 5s, 15s]
+
+# One model per agent. The scorer section above is the default; each agent
+# listed here gets its own model, stating only what differs from it.
+agents:
+  attributes: [agent.name, service.name]         # where a trace names its agent: root span, then resource
+  # models:
+  #   support-bot:                               # each model complete: nothing comes from scorer
+  #     endpoint: https://api.typesafe.ai/v1/systemone
+  #     model: jev-latest
+  #     manifest: manifests/support-bot.json      # see examples/agents.yaml
+
+policy:
+  keep_threshold: 0.5
+  random_floor: 0.02
+
+# Where the engine's own errors are written, as structured log records:
+# JSON lines on stdout or in a file, or OTLP logs to an OpenTelemetry collector.
+observability:
+  error_sinks:
+    - kind: stdout
+    # - kind: file
+    #   path: /var/log/tailwise/errors.jsonl
+    # - kind: otlp
+    #   endpoint: http://localhost:4318/v1/logs
+    #   headers_env: LOGS_OTLP_HEADERS
+  # The engine's own OpenTelemetry metrics (latencies, error rates, decisions).
+  metrics:
+    # endpoint: http://localhost:4318/v1/metrics  # OTLP/HTTP; unset means off
+    # headers_env: METRICS_OTLP_HEADERS
+    interval: 15s
+
+# Where kept traces go: any number of OTLP/HTTP back ends, each sent every
+# kept trace asynchronously from its own queue (in NATS when queue.url is
+# set). TAILWISE_EXPORT_ENDPOINT replaces the first endpoint.
+# examples/langfuse.yaml adds Langfuse.
+exporters:
+  - name: phoenix
+    endpoint: http://localhost:6006/v1/traces
+    resource_attributes:
+      openinference.project.name: tailwise     # the Phoenix project
+    # headers: {x-team: observability}            # sent as written
+    # headers_env: PHOENIX_OTLP_HEADERS           # "key=value,key2=value2" from the environment, for secrets
+    # queue_size: 1024
+    # concurrency: 4
+    # max_deliver: 3                              # tries before giving up (dead-lettered on NATS)
+    # backoff: [1s, 5s, 30s]                      # wait before each retry

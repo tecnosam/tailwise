@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../tailwise.schema.yaml
+#
+# One model per agent. Traces from support-bot and research-agent are scored
+# with their own questions; every other trace by the default
+# (the scorer section, here Jev with its built-in questions). A trace names
+# its agent with the OpenInference span attribute agent.name, or its
+# resource's service.name; a JSON API trace with its agent field.
+#
+#   export JEV_API_KEY=...
+#   make run CONFIG=examples/agents.yaml
+#
+# Each agents.models entry is complete on its own: endpoint and model are
+# required, and nothing comes from the scorer section; keys it leaves out get
+# the engine's built-in defaults.
+
+agents:
+  attributes: [agent.name, service.name]
+  models:
+    support-bot:
+      endpoint: https://api.typesafe.ai/v1/systemone
+      model: jev-latest
+      manifest: manifests/support-bot.json
+    research-agent:
+      endpoint: https://api.typesafe.ai/v1/systemone
+      model: jev-latest
+      manifest: manifests/research-agent.json
+      timeout: 45s           # longer traces take longer to score

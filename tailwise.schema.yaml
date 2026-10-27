@@ -1,0 +1,560 @@
+# JSON Schema (draft 2020-12, written as YAML) for tailwise.yaml, the
+# inference engine's configuration file.
+#
+# Every key is optional except scorer.manifest; a key left out takes the
+# `default` shown here. Unknown keys are rejected at start-up, as they are by
+# this schema. `x-env` names an environment variable that overrides the key.
+#
+# The engine checks more than a schema can say: several keys must agree with
+# each other. Those rules are in the descriptions, marked "Rule:".
+#
+# internal/config/schema_test.go fails if this file and the Go config drift
+# apart (a key missing on either side, or a different default).
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://github.com/tecnosam/tailwise/tailwise.schema.yaml
+title: Tailwise inference engine configuration
+type: object
+additionalProperties: false
+
+$defs:
+  duration:
+    type: string
+    description: >-
+      A Go duration: a number and a unit, optionally repeated, for example
+      500ms, 10s, 2m, 1h30m. Units are ns, us, ms, s, m and h. It must be a
+      string; a bare number is rejected.
+    pattern: '^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$'
+  httpURL:
+    type: string
+    description: An http:// or https:// URL including the path.
+    pattern: '^https?://[^/]+'
+  listenAddr:
+    type: string
+    description: A listen address as host:port. An empty host listens on every interface, for example ":8080".
+  unit:
+    type: number
+    minimum: 0
+    maximum: 1
+
+properties:
+  server:
+    type: object
+    description: The JSON API and the pool of workers that score queued traces.
+    additionalProperties: false
+    properties:
+      addr:
+        $ref: '#/$defs/listenAddr'
+        minLength: 1
+        default: ":8080"
+        description: >-
+          Listen address of the JSON API (POST /v1/traces, POST
+          /v1/traces:score, /healthz, /readyz, /docs, /openapi.yaml).
+      workers:
+        type: integer
+        minimum: 1
+        default: 8
+        description: >-
+          Goroutines pulling traces from the queue. Each scores one trace at a
+          time, so this is the number of concurrent Kev requests from this
+          process.
+      shutdown_timeout:
+        $ref: '#/$defs/duration'
+        default: 30s
+        description: >-
+          On SIGINT or SIGTERM, how long in-flight requests and traces get to
+          finish before the process stops. A trace still in progress after
+          that goes back to the queue. Must be positive.
+
+  queue:
+    type: object
+    description: >-
+      The work queue between intake (the JSON API and the OTLP assemblers)
+      and the workers with its dead-letter stream, the store where OTLP
+      spans wait to be assembled, and the export queues. They all live in
+      NATS JetStream: on the server at url, or, with url empty, on a NATS
+      server embedded in the engine. Every key below applies either way.
+    additionalProperties: false
+    properties:
+      url:
+        type: string
+        pattern: '^((nats|tls)://[^/]+.*)?$'
+        x-env: TAILWISE_NATS_URL
+        description: >-
+          NATS server URL, nats:// or tls://. Empty (the default) runs a NATS
+          server inside the engine, with nothing else to run and no port
+          opened; engines then cannot share the work.
+      store_dir:
+        type: string
+        description: >-
+          Where the embedded NATS server keeps its streams, used only when
+          url is empty. Empty (the default) is a temporary directory removed
+          when the engine stops, so queued work is lost on restart; set a
+          path to keep it. A relative path resolves against this file's
+          directory. With url empty, replicas must be 1.
+      connect_timeout:
+        $ref: '#/$defs/duration'
+        default: 30s
+        description: >-
+          How long to keep trying to reach NATS at start-up before giving up.
+          After start-up the client reconnects on its own. Must be positive.
+      prefix:
+        type: string
+        pattern: '^[A-Za-z0-9_-]+$'
+        default: tailwise
+        description: >-
+          Names every NATS stream, subject and consumer the engine uses. With
+          the default the streams are TAILWISE_TRACES, TAILWISE_TRACES_DLQ,
+          TAILWISE_EXPORTS, TAILWISE_EXPORTS_DLQ, TAILWISE_SPANS and
+          TAILWISE_PENDING, the subjects tailwise.traces and so on, and the
+          workers' consumer tailwise-workers. Engines with the same prefix
+          share the work; give each deployment on one NATS server its own.
+      max_messages:
+        type: integer
+        minimum: 1
+        default: 100000
+        description: >-
+          Most traces the stream holds. Beyond it, POST /v1/traces answers 503
+          with Retry-After.
+      ack_wait:
+        $ref: '#/$defs/duration'
+        default: 2m
+        description: >-
+          How long a worker may hold a trace before the queue gives it to
+          another worker. A queued trace gets one scoring call per delivery,
+          so the rule is: must exceed the longest scoring call, the largest
+          timeout among scorer and agents.models (10s with the defaults);
+          otherwise a slow trace is scored twice.
+      max_deliver:
+        type: integer
+        minimum: 1
+        default: 5
+        description: >-
+          Delivery attempts for a trace that keeps hitting system errors (Kev
+          down, timing out, answering 5xx) before it is moved to the
+          dead-letter stream.
+      redelivery_backoff:
+        type: array
+        items:
+          $ref: '#/$defs/duration'
+        default: [5s, 30s, 2m, 5m]
+        description: >-
+          Delay before each redelivery after a system error. Entry i is the
+          wait before delivery i+2; the last entry repeats. Empty means
+          redeliver at once.
+      dlq_max_age:
+        $ref: '#/$defs/duration'
+        default: 168h
+        description: >-
+          How long dead letters (traces and exports) are kept before NATS
+          removes them. Must be positive.
+      replicas:
+        type: integer
+        minimum: 1
+        maximum: 5
+        default: 1
+        description: >-
+          Copies of each stream the engine creates (traces, dead letters,
+          spans, pending markers, export queues) that a NATS cluster keeps. Set
+          3 on a three-server cluster so losing a server loses nothing. More
+          than the cluster has servers fails at start-up. NATS only.
+      auth:
+        type: object
+        additionalProperties: false
+        description: >-
+          How the engine authenticates to NATS. Set at most one way; secrets
+          come from environment variables. Relative paths resolve against this
+          file's directory. Empty: no authentication, or credentials in the URL.
+          NATS only.
+        properties:
+          credentials_file:
+            type: string
+            description: A .creds file (user JWT and nkey seed), as NATS accounts and Synadia Cloud issue.
+          nkey_seed_file:
+            type: string
+            description: A file holding an nkey seed (SU...).
+          user:
+            type: string
+            description: "A user name. Rule: with password_env."
+          password_env:
+            type: string
+            description: "Name of the environment variable holding user's password. Rule: must be set."
+          token_env:
+            type: string
+            description: "Name of the environment variable holding an auth token. Rule: must be set."
+      tls:
+        type: object
+        additionalProperties: false
+        description: >-
+          TLS to NATS. Any key turns it on, as a tls:// URL does. Relative paths
+          resolve against this file's directory. NATS only.
+        properties:
+          ca_file:
+            type: string
+            description: PEM CA bundle that verifies the server, for a private CA.
+          cert_file:
+            type: string
+            description: "PEM client certificate, for mutual TLS. Rule: with key_file."
+          key_file:
+            type: string
+            description: "PEM key of cert_file. Rule: with cert_file."
+
+  otlp:
+    type: object
+    description: >-
+      The OpenTelemetry receivers, and how the spans they take in are
+      assembled into traces. Spans are stored in NATS under their trace ID; a
+      trace is assembled once it goes quiet and then joins the work queue.
+      With both addresses empty, OTLP ingestion is off and the rest of this
+      section is ignored.
+    additionalProperties: false
+    properties:
+      grpc_addr:
+        $ref: '#/$defs/listenAddr'
+        default: ":4317"
+        x-env: TAILWISE_OTLP_GRPC_ADDR
+        description: >-
+          Listen address of the OTLP gRPC receiver. "" turns gRPC off (in the
+          file only: an empty environment variable is ignored). Rule: must
+          differ from otlp.http_addr and server.addr.
+      http_addr:
+        $ref: '#/$defs/listenAddr'
+        default: ":4318"
+        x-env: TAILWISE_OTLP_HTTP_ADDR
+        description: >-
+          Listen address of the OTLP HTTP receiver (POST /v1/traces, protobuf
+          or JSON). "" turns it off. Rule: must differ from otlp.grpc_addr and
+          server.addr.
+      idle_timeout:
+        $ref: '#/$defs/duration'
+        default: 10s
+        description: >-
+          A trace that has received no span for this long is taken as complete
+          and assembled. Every decision on an OTLP trace is delayed by at
+          least this much. Set it above the longest gap between two spans of
+          one run, for example a slow model call. Must be positive.
+      max_wait:
+        $ref: '#/$defs/duration'
+        default: 2m
+        description: >-
+          Assemble a trace this long after its first span even if spans are
+          still arriving. Rule: at least otlp.idle_timeout.
+      assemblers:
+        type: integer
+        minimum: 1
+        default: 4
+        description: Goroutines assembling completed traces from their stored spans.
+      span_max_age:
+        $ref: '#/$defs/duration'
+        default: 1h
+        description: >-
+          Spans that were never assembled are removed after this long. Rule:
+          must exceed otlp.max_wait.
+  scorer:
+    type: object
+    description: >-
+      The default decision model, a System One model: it scores every trace
+      whose agent has no model of its own under agents.models. With nothing
+      set it is TypeSafe's hosted Jev, which needs only $JEV_API_KEY.
+    additionalProperties: false
+    properties:
+      kind:
+        type: string
+        minLength: 1
+        default: jev
+        description: >-
+          Which System One model the endpoint serves. jev is TypeSafe's hosted
+          Jev, whose key is read from $JEV_API_KEY unless api_key_env names
+          another variable. Any other kind (kev, laya, ...) needs no key
+          unless api_key_env is set. All speak the same /v1/systemone
+          protocol.
+      api_key_env:
+        type: string
+        description: >-
+          Name of the environment variable that holds the scorer's API key,
+          sent as "Authorization: Bearer <key>" with every request. Defaults to
+          JEV_API_KEY when scorer.kind is jev; unset means no key for any other kind. The
+          key itself never goes in this file. Rule: when set (or defaulted),
+          the variable must be set and non-empty at start-up.
+      endpoint:
+        $ref: '#/$defs/httpURL'
+        default: https://api.typesafe.ai/v1/systemone
+        x-env: TAILWISE_SCORER_ENDPOINT
+        description: >-
+          The model's scoring URL. The readiness probe is a GET on /v1/models
+          at the same host, which also checks the API key.
+      model:
+        type: string
+        minLength: 1
+        default: jev-latest
+        description: Model name sent with every request.
+      manifest:
+        type: string
+        minLength: 1
+        x-env: TAILWISE_MANIFEST
+        description: >-
+          Path to a manifest.json for this model. A relative path resolves
+          against this file's directory. The engine reads two things from
+          it: `questions`, sent to the model unchanged with every request,
+          and `model`, which is only logged. Optional: without one the model
+          is asked the built-in questions, and the engine logs a warning at
+          start-up.
+      decision_question:
+        type: string
+        minLength: 1
+        default: answer_wrong
+        description: >-
+          Name of the question whose answer decides keep or drop. It must
+          exist in the manifest's `questions` (or the built-in ones:
+          answer_wrong) and have type `noul`; its
+          probability is read as the probability the trace is worth keeping.
+      reason_question:
+        type: string
+        default: why_wrong
+        description: >-
+          Name of a `choice` question whose answer says why the final answer
+          is wrong. Each option's description is a plain-English sentence;
+          the one the model chooses becomes the decision's `reason`, and the
+          option's name its `cause`. The built-in questions include
+          why_wrong. A manifest without it gives reasons that only say how
+          likely the answer is wrong, with a warning at start-up. Empty turns
+          reasons off.
+      timeout:
+        $ref: '#/$defs/duration'
+        default: 30s
+        description: Time limit for one request to the model. Must be positive.
+      max_retries:
+        type: integer
+        minimum: 0
+        default: 3
+        description: >-
+          Retries after the first attempt on the synchronous endpoint
+          (POST /v1/traces:score) only, for any failure but a rejected
+          request (400, 413, 422). A queued trace is not retried in the
+          worker: the queue redelivers it (queue.max_deliver,
+          queue.redelivery_backoff), so the two never multiply.
+      backoff:
+        type: array
+        items:
+          $ref: '#/$defs/duration'
+        default: [1s, 5s, 15s]
+        description: >-
+          Base delay before each synchronous retry; the last entry repeats.
+          The actual delay is random, between half the base and the base.
+          Empty means no wait.
+
+  agents:
+    type: object
+    description: >-
+      One model per agent: each trace is scored by its agent's model, with
+      that agent's questions, key or endpoint. The agent is named by a span attribute (OTLP) or
+      the trace's agent field (JSON API). An agent with no model here, or a
+      trace naming no agent, is scored by the scorer section.
+    additionalProperties: false
+    properties:
+      attributes:
+        type: array
+        items: {type: string, minLength: 1}
+        default: [agent.name, service.name]
+        description: >-
+          The attributes that hold the agent's name, tried in order on the
+          trace's root span and then on its resource; the first one set wins.
+          agent.name is OpenInference's; service.name is the OpenTelemetry
+          resource's. Rule: at least one when models is set.
+      models:
+        type: object
+        description: >-
+          Agent name to its own model, e.g. support-bot: {endpoint:
+          https://api.typesafe.ai/v1/systemone, model: jev-latest, manifest:
+          manifests/support-bot.json}. Each entry takes the scorer section's
+          keys and is complete on its own: endpoint and model are required,
+          and nothing comes from the scorer section (nor from
+          TAILWISE_SCORER_ENDPOINT or TAILWISE_MANIFEST, which change only the
+          scorer section). Keys it leaves out get the engine's built-in
+          defaults; without a manifest it gets the built-in questions and a
+          warning. A relative manifest resolves against this file's
+          directory. queue.ack_wait must exceed the slowest model's timeout.
+        additionalProperties:
+          $ref: '#/properties/scorer'
+
+  policy:
+    type: object
+    description: How a keep probability becomes a keep or drop decision.
+    additionalProperties: false
+    properties:
+      keep_threshold:
+        $ref: '#/$defs/unit'
+        default: 0.5
+        description: >-
+          Keep a trace when the model's probability that its answer is wrong is at least this.
+          Lower keeps more traces.
+      random_floor:
+        $ref: '#/$defs/unit'
+        default: 0.02
+        description: >-
+          Share of the remaining traces kept at random: those scored below
+          the threshold, and those Kev could not score at all. It gives an
+          unbiased sample for checking the model. 0 turns it off.
+
+  observability:
+    type: object
+    description: Where the engine reports its own errors.
+    additionalProperties: false
+    properties:
+      error_sinks:
+        type: array
+        default: [{kind: stdout}]
+        description: >-
+          Every place an error is written, as one structured log record with
+          its kind (unavailable, timeout, rejected, invalid, full, internal),
+          the component it came from, what it was doing and the trace it
+          concerns: a JSON line on stdout or in a file, or an OTLP log record
+          sent to an OpenTelemetry collector. Every sink receives every
+          error. An empty list reports nothing.
+        items:
+          type: object
+          additionalProperties: false
+          required: [kind]
+          properties:
+            kind:
+              type: string
+              enum: [stdout, file, otlp]
+              description: stdout, a file that is appended to, or an OpenTelemetry collector over OTLP/HTTP logs.
+            path:
+              type: string
+              description: "For a file sink, the file to append to. Rule: required for kind file."
+            endpoint:
+              $ref: '#/$defs/httpURL'
+              description: >-
+                For an otlp sink, the full OTLP/HTTP logs URL, path included,
+                e.g. http://otel-collector:4318/v1/logs. Rule: required for
+                kind otlp.
+            headers:
+              type: object
+              additionalProperties: {type: string}
+              description: For an otlp sink, headers sent with every request, as written.
+            headers_env:
+              type: string
+              description: >-
+                For an otlp sink, an environment variable holding more headers
+                as "key=value,key2=value2", for secrets.
+      metrics:
+        type: object
+        default: {interval: 15s}
+        description: >-
+          The engine's own OpenTelemetry metrics, sent over OTLP/HTTP:
+          http.server.request.duration (JSON API and OTLP/HTTP),
+          rpc.server.call.duration (OTLP/gRPC), tailwise.scorer.duration (by
+          agent and model), tailwise.export.duration (by exporter),
+          tailwise.decisions and tailwise.errors. Failures carry error.type,
+          so an error rate is their count over the total. Off unless endpoint
+          is set.
+        additionalProperties: false
+        properties:
+          endpoint:
+            $ref: '#/$defs/httpURL'
+            description: >-
+              The full OTLP/HTTP metrics URL, path included, e.g.
+              http://otel-collector:4318/v1/metrics. Empty turns metrics off.
+          headers:
+            type: object
+            additionalProperties: {type: string}
+            description: Headers sent as written. Keep secrets in headers_env.
+          headers_env:
+            type: string
+            description: >-
+              Name of an environment variable holding more headers, "key=value,key2=value2".
+              OTEL_EXPORTER_OTLP_HEADERS is not read. Rule: must be set when named.
+          interval:
+            $ref: '#/$defs/duration'
+            default: 15s
+            description: "How often metrics are sent. Rule: positive."
+          resource_attributes:
+            type: object
+            additionalProperties: {type: string}
+            description: Added to service.name=tailwise, e.g. deployment.environment.
+
+  exporters:
+    type: array
+    x-env: TAILWISE_EXPORT_ENDPOINT
+    default:
+      - name: phoenix
+        endpoint: http://localhost:6006/v1/traces
+        resource_attributes: {openinference.project.name: tailwise}
+    description: >-
+      Every trace back end kept traces are sent to, over OTLP/HTTP: Phoenix,
+      Langfuse, an OpenTelemetry Collector, or anything else that accepts
+      OTLP traces. Each kept trace goes to all of them, asynchronously: each
+      back end has its own queue and workers, so a slow or unreachable one
+      never holds up scoring or the others. Dropped traces are sent nowhere.
+      An empty list exports nothing. TAILWISE_EXPORT_ENDPOINT, when set,
+      replaces the first exporter's endpoint.
+    items:
+      type: object
+      additionalProperties: false
+      required: [name, endpoint]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: >-
+            Identifies the back end in logs and errors, and names its export
+            stream on NATS. Rule: letters, digits, '-' and '_'; unique among
+            the exporters, ignoring case and '-' versus '_'.
+        endpoint:
+          $ref: '#/$defs/httpURL'
+          description: >-
+            The full OTLP/HTTP traces URL, path included: for example
+            http://localhost:6006/v1/traces for Phoenix, or
+            https://cloud.langfuse.com/api/public/otel/v1/traces for Langfuse.
+            The back end may be down at start-up; a failed export is reported
+            and not retried later.
+        headers:
+          type: object
+          additionalProperties: {type: string}
+          description: >-
+            Headers sent with every request, as written. Keep secrets out of
+            the file and use headers_env for them.
+        headers_env:
+          type: string
+          description: >-
+            Name of an environment variable holding more headers, in the
+            OpenTelemetry format "key=value,key2=value2" (values may be
+            percent-encoded, e.g. Basic%20abc). They are added to headers,
+            replacing any of the same name. The global
+            OTEL_EXPORTER_OTLP_HEADERS is not read, so one back end's
+            credentials never reach another. Rule: when set, the variable
+            must be set and parse at start-up.
+        resource_attributes:
+          type: object
+          additionalProperties: {type: string}
+          description: >-
+            Attributes set on the resource of every span sent to this back
+            end, besides service.name=tailwise. Phoenix files traces by
+            openinference.project.name.
+        queue_size:
+          type: integer
+          minimum: 0
+          default: 1024
+          description: >-
+            Kept traces waiting to be sent to this back end. Past it, a trace
+            is not sent to this back end and the drop is reported. 0 means
+            the default.
+        concurrency:
+          type: integer
+          minimum: 0
+          default: 4
+          description: Traces sent to this back end at once. 0 means the default.
+        max_deliver:
+          type: integer
+          minimum: 0
+          default: 3
+          description: >-
+            Times a trace is tried before it is given up: reported, and on
+            NATS also moved to the export dead-letter stream (<PREFIX>_EXPORTS_DLQ). Errors a retry cannot
+            fix (corrupt spans) are given up at once. 0 means the default.
+        backoff:
+          type: array
+          items: {$ref: '#/$defs/duration'}
+          default: [1s, 5s, 30s]
+          description: Wait before each retry; the last value repeats. Empty means the default.

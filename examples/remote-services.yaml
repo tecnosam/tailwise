@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=../tailwise.schema.yaml
+#
+# The engine on one machine, its dependencies elsewhere: Jev (the default
+# scorer), a NATS cluster over TLS, and Phoenix as a hosted service. The
+# hostnames are placeholders. The NATS and Phoenix URLs can also come from
+# the environment (TAILWISE_NATS_URL, and TAILWISE_EXPORT_ENDPOINT for the
+# first exporter), which is how docker-compose.yml sets them.
+#
+# Secrets come from the environment: the Jev key from JEV_API_KEY, the hosted
+# Phoenix key from the variable headers_env names, in the OpenTelemetry
+# headers format, and the NATS token from NATS_TOKEN:
+#   export JEV_API_KEY=... PHOENIX_OTLP_HEADERS="api_key=..." NATS_TOKEN=...
+
+server:
+  workers: 16                # more concurrent calls to Jev; mind your plan's rate limit
+  shutdown_timeout: 60s
+
+queue:
+  url: tls://nats.internal.example.com:4222
+  connect_timeout: 60s
+  replicas: 3                # a three-server NATS cluster
+  auth:
+    token_env: NATS_TOKEN    # or credentials_file: tailwise.creds
+
+scorer:
+  manifest: manifests/my-agent.json   # your own questions; leave it out for the built-in ones
+  # A self-hosted System One model instead of Jev:
+  # kind: kev
+  # endpoint: http://kev-gpu.internal.example.com:8010/v1/systemone
+  # model: kev-latest
+  # api_key_env: KEV_API_KEY # if it sits behind a proxy that wants a bearer token
+
+exporters:
+  - name: phoenix
+    endpoint: https://app.phoenix.arize.com/v1/traces
+    headers_env: PHOENIX_OTLP_HEADERS
+    resource_attributes:
+      openinference.project.name: tailwise-production

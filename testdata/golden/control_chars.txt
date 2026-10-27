@@ -1,0 +1,18 @@
+USER QUESTION:
+¿Qué significa «naïve» en español? 日本語もOK 😀
+
+TOOL CALLS:
+1. search({"q":"naïve café 日本語 😀 \ud83d\ude80","ключ":"значение"}) -> ok
+2. raw("nul:\u0000 bell:\u0007 esc:\u001b del:\u007f c1:\u0085 nbsp:\u00a0 shy:\u00ad") -> ok
+3. raw("zwsp:\u200b ls:\u2028 ps:\u2029 bom:\ufeff emsp:\u2003 pua:\ue000 rlo:\u202e") -> ok
+4. raw("tag:\udb40\udc01 astral-pua:\udb80\udc00 math:\ud835\udc00 combining:e\u0301") -> ok
+5. raw({"\u0000key\n":"\ttab","é":"\\u00e9"}) -> tímed
+out
+
+EVIDENCE:
+[1] Línea uno
+línea dos con nbsp y ​ zwsp
+[2] 😀 emoji evidence stays raw
+
+FINAL ANSWER:
+«Ingenuo» — naïve.

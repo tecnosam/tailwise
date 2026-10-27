@@ -1,0 +1,23 @@
+{
+  "model": "jev-latest",
+  "note": "A manifest for your agent: the questions it is asked. answer_wrong decides keep or drop, and why_wrong picks the plain-English reason; word both for your agent.",
+  "questions": {
+    "answer_wrong": {
+      "type": "noul",
+      "instructions": "Is the final answer wrong or only partially correct for the user's question?"
+    },
+    "why_wrong": {
+      "type": "choice",
+      "instructions": "Which best explains what is wrong with the final answer? Choose \"correct\" if nothing is wrong.",
+      "criteria": {
+        "correct": "The final answer is correct, complete and supported by the evidence.",
+        "contradicts_evidence": "The final answer contradicts the evidence the agent gathered.",
+        "unsupported": "The final answer makes claims the evidence does not support.",
+        "incomplete": "The final answer leaves out part of what the question asked.",
+        "wrong_lookup": "The agent looked up the wrong thing, so its evidence does not answer the question.",
+        "ignored_tool_failure": "A tool call failed and the agent answered anyway without the information it needed.",
+        "no_answer": "The agent did not give an answer."
+      }
+    }
+  }
+}
