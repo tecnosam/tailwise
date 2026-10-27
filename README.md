@@ -560,7 +560,7 @@ so it does not take the engine out of a load balancer; watch
 1. **Route.** The trace's agent picks its model (see
    [One model per agent](#one-model-per-agent)).
 2. **Slice.** `trace.BuildState` renders the trace into the text the model
-   reads (see [The slice](#the-slice-and-its-golden-files)).
+   reads (see [The slice](CONTRIBUTING.md#the-slice-and-its-golden-files)).
 3. **Score.** The slice and the model's questions (its manifest's, or the
    built-in ones) go to the model, in one call. A queued trace that hits a system error goes back to the
    queue for redelivery. On the synchronous endpoint, which has no queue,
@@ -933,29 +933,6 @@ Before a rollout, `tailwise -check -config my-config.yaml` (or plain
 configuration and its manifests, checks the secrets it names are set, prints
 any warnings, and exits: 0 if valid, 1 with the problems if not.
 
-## The slice and its golden files
-
-`trace.BuildState` renders a trace into the text the model reads. Tool
-arguments, and any status that is not a string, are written as compact JSON
-(`search({"query":"capital of France","limit":3}) -> ok`), and evidence is
-cut to 1500 Unicode code points rather than bytes.
-
-- `testdata/traces/*.json`: input fixtures
-- `testdata/golden/*.txt`: the slice for each, as `BuildState` writes it
-
-`TestBuildStateGolden` fails if `BuildState` stops producing exactly these
-files, so what the model reads never changes by accident. A second test
-sends every fixture through the queue and checks the worker builds the same
-slice.
-
-**After an intended change** to the slice, or a new fixture, rewrite the
-golden files and review their diff before committing:
-
-```sh
-make golden
-make test
-```
-
 ## Known limitations
 
 These are open problems in the current version, not design choices to rely on.
@@ -1018,88 +995,7 @@ traces go back to the queue; they are not dead-lettered and get no fallback
 decision. Last, the exporters send the traces still queued for them and
 shut down (up to 10 seconds in all).
 
-## Tests
+## Contributing
 
-`make test` needs no network and no Docker. The queue tests run a real NATS
-server in-process on a loopback port (`internal/queue/queuetest`), so
-redelivery, dead-lettering and stream limits are tested against JetStream
-itself, not a fake.
-
-## Layout
-
-```
-cmd/tailwise/      flags, config load, wiring, graceful shutdown
-internal/          every package, none importable from another module:
-  pipeline/        the core: domain types, interfaces, model routing, keep/drop policy, the Engine
-  trace/           trace types (with the agent) and BuildState
-  fault/           the error type: kind, component, operation, trace
-  observe/         the error pipeline and its sinks (stdout, file, otlp)
-  metrics/         the engine's OpenTelemetry metrics
-  retry/           the one retry policy
-  config/          the YAML file (File), the engine's settings (Engine), validation
-  scorer/          System One model client (Jev, ...) and the per-agent model builder
-  broker/          the JetStream connection: an external NATS, or one embedded
-  queue/           the trace queue and span store: the contract and settings
-    natsq/         on JetStream
-  export/          exporters: the dispatcher, the back-end and queue contracts
-    otlpbackend/   the OTLP/HTTP back end
-    natsq/         export queues on JetStream
-  server/          HTTP handlers and the OpenAPI spec
-  otlp/            OTLP gRPC and HTTP receivers, span-to-trace mapping
-  jsq/             the generic JetStream work queue both NATS queues are built on
-  common/          shared helpers: NATS connection and pull loop, worker pool, request metrics
-```
-
-## Versioning and releases
-
-Tailwise follows [Semantic Versioning](https://semver.org), starting at
-0.1.0, and records every release in [CHANGELOG.md](CHANGELOG.md). Releases are
-git tags (`v0.1.0`), and the changelog is built from commit messages, so
-commits follow [Conventional Commits](https://www.conventionalcommits.org):
-
-| Commit | Example | Bumps |
-| --- | --- | --- |
-| `fix:` | `fix(scorer): retry a 529 from Jev` | patch: 0.1.0 to 0.1.1 |
-| `feat:` | `feat(api): add a cause field` | minor: 0.1.1 to 0.2.0 |
-| `feat!:`, or `BREAKING CHANGE:` in the body | `feat!: rename the reason field` | minor before 1.0.0 (0.2.0 to 0.3.0), major after |
-| `docs:`, `refactor:`, `perf:` | `docs: explain manifests` | listed in the changelog, patch |
-| `chore:`, `test:`, `ci:`, `build:`, `style:` | `test: cover the embedded broker` | not listed |
-
-[git-cliff](https://git-cliff.org), configured in [cliff.toml](cliff.toml),
-computes the next version and writes its changelog section. The Makefile
-runs it through `npx`, so there is nothing to install beyond Node; set
-`GIT_CLIFF=git-cliff` to use a local one.
-
-```sh
-make version                 # what this checkout builds as, e.g. 0.1.0-3-gabc1234
-make changelog               # preview the next version and its changelog section
-make release                 # bump from the commits, write CHANGELOG.md, sync the Helm chart, commit and tag
-make release BUMP=minor      # or force patch, minor or major
-git push --follow-tags       # publish the release commit and its tag
-make image                   # build the Docker image tagged with the version
-```
-
-`make release` refuses to run with uncommitted changes, and when nothing new
-is releasable. The binary reports its version with `tailwise -version` and in
-its start-up log line; `make build`, `make image` and `make up` stamp it from
-git, and a plain `go build` reports `dev`.
-
-## Make targets
-
-| Target | Does |
-| --- | --- |
-| `make build` | Build `bin/tailwise`, stamped with the version |
-| `make version` | Print the version this checkout builds as |
-| `make changelog` | Preview the next version and its changelog section |
-| `make release` | Cut a release: version, CHANGELOG.md, Helm chart, commit and tag (`BUMP=auto\|patch\|minor\|major`) |
-| `make image` | Build the Docker image tagged with the version |
-| `make test` | `go vet ./...` and `go test -race ./...` |
-| `make run` | Build and run on the host on the built-in defaults (`CONFIG=path` for a config file); needs `JEV_API_KEY` |
-| `make nats` | Start only NATS in Docker, for `TAILWISE_NATS_URL=nats://localhost:4222 make run` |
-| `make up` / `make down` | Start or stop the engine, NATS and Phoenix in Docker; `up` needs `JEV_API_KEY` |
-| `make samples` | Send the bundled sample traces and print each decision |
-| `make logs` | Follow the engine container's log |
-| `make dlq` | Show the dead-letter stream's state |
-| `make lint` | gofmt check and `go vet` |
-| `make chart-lint` | Lint the Helm chart and render its main setups (needs helm) |
-| `make golden` | Rewrite the golden slice files after an intended change to the slice |
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the code layout, tests, the golden
+slice files, commit conventions, releases and every `make` target.
