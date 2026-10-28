@@ -24,13 +24,17 @@ const (
 )
 
 type Score struct {
-	P       Probability // that the final answer is wrong
+	// P is p_keep: the decision question's answer, or the manifest's pool of
+	// answers.
+	P       Probability
 	Model   ModelName
 	Latency time.Duration // as the server reported it, else the round trip
 	// Cause is the model's choice for the reason question, Explanation its
 	// plain-English description; both empty when it gave none.
 	Cause       string
 	Explanation string
+	// Answers holds every yes/no (noul) answer the model gave, by question.
+	Answers map[string]Probability
 }
 
 type Decision struct {
@@ -53,6 +57,9 @@ type Record struct {
 	Decision Decision
 	Model    ModelName
 	Latency  time.Duration
+	// Answers are the model's yes/no answers p_keep was decided from; none on
+	// fallback.
+	Answers map[string]Probability
 }
 
 type Outcome struct {

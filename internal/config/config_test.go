@@ -277,6 +277,10 @@ func TestLoadWithoutAFile(t *testing.T) {
 	if m.Client.ReasonQuestion != "why_wrong" || m.Client.Reasons["contradicts_evidence"] != "The final answer contradicts the evidence the agent gathered." {
 		t.Errorf("reason question %q, reasons %v", m.Client.ReasonQuestion, m.Client.Reasons)
 	}
+	// They combine answer_wrong and the five checks into p_keep.
+	if p := m.Client.Pool; p == nil || len(p.Weights) != 6 || p.Weights["answer_wrong"] != 0.5 || p.Weights["contradicts_knowledge"] != 0.1 {
+		t.Errorf("pool = %+v, want the built-in weights", p)
+	}
 	t.Setenv(DefaultJevAPIKeyEnv, "")
 	if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "$JEV_API_KEY is not set") {
 		t.Errorf("no key: error = %v", err)
@@ -378,5 +382,39 @@ func TestNATSNamesFromThePrefix(t *testing.T) {
 		"TAILWISE_SPANS", "tailwise.spans", "TAILWISE_PENDING", "tailwise.pending"}
 	if !slices.Equal(got, want) {
 		t.Errorf("names = %q\nwant    %q", got, want)
+	}
+}
+
+// A manifest's decision block becomes the scorer's pool; it may weight only
+// its own yes/no questions. Without one, p_keep is the decision answer.
+func TestManifestDecisionWeights(t *testing.T) {
+	cfg, err := Load(write(t, "scorer:\n  manifest: manifest.json\n", testManifest))
+	if err != nil || cfg.Models.Default.Client.Pool != nil {
+		t.Fatalf("no decision block: pool %+v, error %v", cfg.Models.Default.Client.Pool, err)
+	}
+
+	with := func(decision string) string {
+		return `{"questions": {"answer_wrong": {"type": "noul"}, "checks": {"type": "noul"},` +
+			` "quality": {"type": "score", "criteria": ["a", "b"]}}, "decision": ` + decision + `}`
+	}
+	cfg, err = Load(write(t, "scorer:\n  manifest: manifest.json\n", with(`{"intercept": -1, "weights": {"answer_wrong": 2, "checks": 0.5}}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := cfg.Models.Default.Client.Pool; p == nil || p.Intercept != -1 || p.Weights["answer_wrong"] != 2 || p.Weights["checks"] != 0.5 {
+		t.Errorf("pool = %+v", p)
+	}
+	if strings.Contains(string(cfg.Models.Default.Client.Questions), "weights") {
+		t.Errorf("the decision block reached the questions sent to the model: %s", cfg.Models.Default.Client.Questions)
+	}
+
+	for decision, wantErr := range map[string]string{
+		`{"weights": {}}`:             "must weight at least one question",
+		`{"weights": {"tone": 1}}`:    `question "tone" not found`,
+		`{"weights": {"quality": 1}}`: `question "quality" has type "score", want "noul"`,
+	} {
+		if _, err := Load(write(t, "scorer:\n  manifest: manifest.json\n", with(decision))); err == nil || !strings.Contains(err.Error(), wantErr) {
+			t.Errorf("%s: error = %v, want %q", decision, err, wantErr)
+		}
 	}
 }

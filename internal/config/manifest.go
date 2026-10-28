@@ -6,7 +6,10 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
+
+	"github.com/tecnosam/tailwise/internal/pipeline"
 )
 
 //go:embed builtin_manifest.json
@@ -99,5 +102,37 @@ func (m *Manifest) prepare(decisionQuestion string) error {
 	if head.Type != questionTypeNoul {
 		return fmt.Errorf("decision question %q has type %q, want %q", decisionQuestion, head.Type, questionTypeNoul)
 	}
+	return m.checkDecision(questions)
+}
+
+// checkDecision accepts a decision block whose weights name only yes/no
+// questions of the manifest.
+func (m *Manifest) checkDecision(questions map[string]json.RawMessage) error {
+	if m.Decision == nil {
+		return nil
+	}
+	if len(m.Decision.Weights) == 0 {
+		return fmt.Errorf("\"decision.weights\" must weight at least one question")
+	}
+	for q := range m.Decision.Weights {
+		raw, ok := questions[q]
+		if !ok {
+			return fmt.Errorf("decision.weights: question %q not found in questions", q)
+		}
+		var head struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &head); err != nil || head.Type != questionTypeNoul {
+			return fmt.Errorf("decision.weights: question %q has type %q, want %q", q, head.Type, questionTypeNoul)
+		}
+	}
 	return nil
+}
+
+// pool is the decision block as the scorer uses it, nil without one.
+func (m *Manifest) pool() *pipeline.Pool {
+	if m.Decision == nil {
+		return nil
+	}
+	return &pipeline.Pool{Intercept: m.Decision.Intercept, Weights: maps.Clone(m.Decision.Weights)}
 }

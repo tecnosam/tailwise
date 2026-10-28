@@ -110,7 +110,7 @@ func (e *Engine) scored(t trace.Trace, model Model, score Score) Record {
 	if d.Reason == "" {
 		d.Reason = probabilityReason(score.P)
 	}
-	return Record{Trace: t, Agent: model.Agent, Decision: d, Model: score.Model, Latency: score.Latency}
+	return Record{Trace: t, Agent: model.Agent, Decision: d, Model: score.Model, Latency: score.Latency, Answers: score.Answers}
 }
 
 // probabilityReason is the reason for a model that gave none of its own.
@@ -161,6 +161,9 @@ func (e *Engine) logDecision(out Outcome) {
 	}
 	if d.Scored {
 		attrs = append(attrs, "p_keep", float64(d.PKeep))
+	}
+	if len(rec.Answers) > 0 {
+		attrs = append(attrs, "answers", rec.Answers)
 	}
 	e.deps.Logger.Info("decision", attrs...)
 }

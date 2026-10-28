@@ -30,6 +30,9 @@ type Config struct {
 	Model            string
 	Questions        json.RawMessage
 	DecisionQuestion string
+	// Pool, when set, combines the yes/no answers into p_keep; without it
+	// p_keep is the decision question's answer.
+	Pool *pipeline.Pool
 	// Reasons maps each option of the reason question to the plain-English
 	// sentence that becomes the decision's reason.
 	ReasonQuestion string
@@ -158,7 +161,13 @@ func (c *Client) parse(raw []byte, elapsed time.Duration) (pipeline.Score, error
 	if err != nil {
 		return pipeline.Score{}, err
 	}
-	score := pipeline.Score{P: p, Model: c.modelName(out), Latency: reportedLatency(out, elapsed)}
+	answers := noulAnswers(out)
+	if c.cfg.Pool != nil {
+		if p, err = c.cfg.Pool.Combine(answers); err != nil {
+			return pipeline.Score{}, err
+		}
+	}
+	score := pipeline.Score{P: p, Answers: answers, Model: c.modelName(out), Latency: reportedLatency(out, elapsed)}
 	score.Cause, score.Explanation = c.reasonAnswer(out)
 	return score, nil
 }
@@ -200,6 +209,21 @@ func (c *Client) decisionAnswer(out response) (pipeline.Probability, error) {
 		return 0, fmt.Errorf("answer %q has noul %v outside [0, 1]", q, p)
 	}
 	return pipeline.Probability(*ans.Noul), nil
+}
+
+// noulAnswers is every well-formed yes/no answer; the rest are left out.
+func noulAnswers(out response) map[string]pipeline.Probability {
+	answers := make(map[string]pipeline.Probability, len(out.Answers))
+	for q, raw := range out.Answers {
+		var ans noulAnswer
+		if json.Unmarshal(raw, &ans) != nil || ans.Noul == nil {
+			continue
+		}
+		if p := *ans.Noul; !math.IsNaN(p) && p >= 0 && p <= 1 {
+			answers[q] = pipeline.Probability(p)
+		}
+	}
+	return answers
 }
 
 func (c *Client) modelName(out response) pipeline.ModelName {

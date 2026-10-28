@@ -140,6 +140,7 @@ func model(s Scorer, apiKey string, m *Manifest) scorer.ModelConfig {
 			Model:            s.Model,
 			Questions:        m.Questions,
 			DecisionQuestion: s.DecisionQuestion,
+			Pool:             m.pool(),
 			ReasonQuestion:   reasonQuestion(s, m),
 			Reasons:          m.Reasons,
 			APIKey:           apiKey,

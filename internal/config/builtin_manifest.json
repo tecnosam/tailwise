@@ -1,10 +1,30 @@
 {
   "model": "built-in",
-  "note": "The questions the engine asks when a model has no manifest of its own: answer_wrong decides keep or drop, and why_wrong picks the plain-English reason.",
+  "note": "The questions the engine asks when a model has no manifest of its own, all in one call: answer_wrong and the five checks after it are combined into p_keep with the weights in decision, and why_wrong picks the plain-English reason.",
   "questions": {
     "answer_wrong": {
       "type": "noul",
       "instructions": "Is the final answer wrong or only partially correct for the user's question?"
+    },
+    "unsupported_answer": {
+      "type": "noul",
+      "instructions": "Does the final answer make claims that the evidence the agent gathered does not support?"
+    },
+    "missing_tool_calls": {
+      "type": "noul",
+      "instructions": "Did the agent leave out tool calls the task needed, so it answered without information it should have looked up?"
+    },
+    "answered_on_failure": {
+      "type": "noul",
+      "instructions": "Did the agent answer even though a tool call failed or returned only partial results?"
+    },
+    "ignored_instructions": {
+      "type": "noul",
+      "instructions": "Does the final answer ignore or go against instructions given in the user's question?"
+    },
+    "contradicts_knowledge": {
+      "type": "noul",
+      "instructions": "Does the final answer contradict well-established general knowledge?"
     },
     "why_wrong": {
       "type": "choice",
@@ -18,6 +38,17 @@
         "ignored_tool_failure": "A tool call failed and the agent answered anyway without the information it needed.",
         "no_answer": "The agent did not give an answer."
       }
+    }
+  },
+  "decision": {
+    "intercept": 0,
+    "weights": {
+      "answer_wrong": 0.5,
+      "unsupported_answer": 0.1,
+      "missing_tool_calls": 0.1,
+      "answered_on_failure": 0.1,
+      "ignored_instructions": 0.1,
+      "contradicts_knowledge": 0.1
     }
   }
 }

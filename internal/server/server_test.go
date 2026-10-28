@@ -655,8 +655,12 @@ func TestScoreDoesNotWaitForTheBackEnd(t *testing.T) {
 // One JSON log line per decision with the fields operators filter on.
 func TestDecisionLogLine(t *testing.T) {
 	var buf strings.Builder
+	answered := func(context.Context, trace.State) (pipeline.Score, error) {
+		return pipeline.Score{P: 0.9, Model: "kev-latest", Latency: 12 * time.Millisecond,
+			Answers: map[string]pipeline.Probability{"answer_wrong": 0.95, "unsupported_answer": 0.7}}, nil
+	}
 	h := newHarness(t, harnessOpts{
-		scorer: &fakeScorer{score: fixedScore(0.9)},
+		scorer: &fakeScorer{score: answered},
 		logger: jsonLogger(&buf),
 	})
 	h.do("POST", "/v1/traces:score", `{"trace_id": "log-1", "question": "q", "final_answer": "a"}`)
@@ -674,6 +678,10 @@ func TestDecisionLogLine(t *testing.T) {
 		if line[k] != v {
 			t.Errorf("log field %s = %v, want %v", k, line[k], v)
 		}
+	}
+	answers, _ := line["answers"].(map[string]any)
+	if answers["answer_wrong"] != 0.95 || answers["unsupported_answer"] != 0.7 {
+		t.Errorf("log field answers = %v, want every yes/no answer", line["answers"])
 	}
 }
 

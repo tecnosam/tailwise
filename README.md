@@ -262,17 +262,68 @@ A manifest holds the questions the model is asked:
 ```
 
 - `questions` is sent to the model unchanged, all questions, in the
-  manifest's order. The decision question's answer is `p_keep`, and the
-  reason question's chosen option is the `reason`.
+  manifest's order, in one call. The reason question's chosen option is the
+  `reason`.
+- `decision`, optional, says how the yes/no (`noul`) answers make `p_keep`
+  (see [Combining the answers](#combining-the-answers)). Without it, `p_keep`
+  is the decision question's answer. It stays in the engine and is not sent
+  to the model.
 - A relative `scorer.manifest` path resolves against the config file's
   directory.
 
 A manifest is optional, for every System One model. Without one the model
-is asked the built-in questions (`answer_wrong`, and `why_wrong` for the
-reason), and the engine logs a warning at start-up. To word the questions
+is asked the built-in questions
+([`builtin_manifest.json`](internal/config/builtin_manifest.json)), and the
+engine logs a warning at start-up. They are:
+
+| Question | Weight | Asks |
+| --- | --- | --- |
+| `answer_wrong` | 0.5 | Is the final answer wrong or only partially correct? |
+| `unsupported_answer` | 0.1 | Does it make claims the evidence does not support? |
+| `missing_tool_calls` | 0.1 | Did the agent skip lookups the task needed? |
+| `answered_on_failure` | 0.1 | Did it answer despite a failed or partial tool call? |
+| `ignored_instructions` | 0.1 | Does it go against the user's instructions? |
+| `contradicts_knowledge` | 0.1 | Does it contradict general knowledge? |
+| `why_wrong` | | Which [reason](#reasons) explains what is wrong? |
+
+Each yes/no answer is the probability that the agent failed in that way, and
+the weights combine them into `p_keep`. To word the questions
 for your agent, start from
 [`examples/manifests/my-agent.json`](examples/manifests/my-agent.json) and
 set `scorer.manifest` (or `TAILWISE_MANIFEST`).
+
+### Combining the answers
+
+A manifest's `decision` block weights its yes/no questions:
+
+```json
+"decision": {
+  "intercept": 0,
+  "weights": {"answer_wrong": 0.5, "unsupported_answer": 0.1, "missing_tool_calls": 0.1,
+              "answered_on_failure": 0.1, "ignored_instructions": 0.1, "contradicts_knowledge": 0.1}
+}
+```
+
+and `p_keep` is a weighted [logarithmic opinion pool](https://en.wikipedia.org/wiki/Logarithmic_opinion_pool)
+of their answers:
+
+```
+p_keep = sigmoid(intercept + Σ weight × logit(answer))      logit(p) = ln(p / (1 − p))
+```
+
+- **Weights summing to 1, no intercept** (as in the built-in questions):
+  `p_keep` stays on the answers' own scale. Answers that agree keep their
+  probability (all at 0.9 give 0.9); answers that disagree meet in between.
+  A larger weight gives a question more say.
+- **Fitted weights.** The formula is a logistic regression on the answers'
+  logits, so the coefficients and intercept of one fitted on labelled traces
+  can be used as they are. They need not sum to 1.
+- **Rules.** Every weighted question must be a `noul` question of the same
+  manifest, and the model must answer all of them: a missing answer is a
+  scoring error, like a missing decision answer. Questions without a weight
+  are still asked and logged, but do not change `p_keep`.
+- **Changing the weights changes `p_keep`,** so recheck `policy.keep_threshold`
+  against the share of traces kept.
 
 ### One model per agent
 
@@ -566,12 +617,16 @@ so it does not take the engine out of a load balancer; watch
    queue for redelivery. On the synchronous endpoint, which has no queue,
    the engine retries it with `scorer.max_retries` and jittered
    `scorer.backoff`. The two kinds of retry never multiply.
-4. **Decide.** `p_keep` is the model's answer to the decision question.
+4. **Decide.** `p_keep` combines the model's yes/no answers with the
+   manifest's weights (see [Combining the answers](#combining-the-answers)),
+   or, for a manifest without them, is its answer to the decision question.
    - `p_keep >= keep_threshold`: keep, rule `above_threshold`.
    - Otherwise keep with probability `random_floor`, rule `random_floor`.
    - Otherwise drop, rule `below_threshold`.
 5. **Export.** Kept traces are queued to every exporter. Each decision produces one JSON log
-   line with `trace_id`, `agent`, `decision`, `rule`, `reason`, `cause`, `p_keep`, `model` and `latency_ms`.
+   line with `trace_id`, `agent`, `decision`, `rule`, `reason`, `cause`, `p_keep`, `model`, `latency_ms`,
+   and `answers`: every yes/no answer, by question, as in
+   `"answers": {"answer_wrong": 0.91, "unsupported_answer": 0.84, ...}`.
 
 ### Reasons
 
@@ -949,9 +1004,11 @@ These are open problems in the current version, not design choices to rely on.
   a change to its request schema), every trace is decided at random, about
   98% dropped with the default `random_floor`, and only `WARN` log lines show
   it.
-- **Decisions use the model's probabilities as they come.** Nothing tunes
-  them to your agent, so `keep_threshold` may keep too much or too little at
-  first. Watch the share of traces kept and adjust the threshold.
+- **The built-in weights are a reasonable guess, not fitted.** Nothing tunes
+  them, or the model's probabilities, to your agent, so `keep_threshold` may
+  keep too much or too little at first. Watch the share of traces kept and
+  adjust the threshold; with labelled traces, fit the weights (see
+  [Combining the answers](#combining-the-answers)).
 - **Every scored trace is a billed call to Jev, and leaves your network.**
   Nothing caps the spend or redacts fields before sending; only
   `server.workers` limits the rate.
