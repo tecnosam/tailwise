@@ -81,7 +81,8 @@ make test
 
 ## Before opening a pull request
 
-- `make lint` and `make test` pass.
+- `make lint` and `make test` pass. CI ([.github/workflows/ci.yml](.github/workflows/ci.yml))
+  runs both, `make build` and `make chart-lint` on every pull request.
 - Changes to the slice come with regenerated golden files (`make golden`)
   whose diff you have reviewed.
 - Commit messages follow Conventional Commits (below): the changelog and the
@@ -122,6 +123,16 @@ make image                   # build the Docker image tagged with the version
 is releasable. The binary reports its version with `tailwise -version` and in
 its start-up log line; `make build`, `make image` and `make up` stamp it from
 git, and a plain `go build` reports `dev`.
+
+Pushing the tag publishes the release.
+[.github/workflows/release.yml](.github/workflows/release.yml) runs the tests
+again, then [GoReleaser](https://goreleaser.com) ([.goreleaser.yaml](.goreleaser.yaml))
+builds `tailwise` for Linux, macOS and Windows on amd64 and arm64, stamped
+with the tag's version, and creates a GitHub release with the archives,
+`checksums.txt`, and the tag's CHANGELOG.md section as its notes
+(`scripts/release-notes.sh 0.1.0` prints them). The release fails if
+CHANGELOG.md has no section for the tag. A tag with a pre-release suffix,
+such as `v0.2.0-rc.1`, is published as a pre-release.
 
 ## Make targets
 

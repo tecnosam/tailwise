@@ -1,0 +1,36 @@
+# GoReleaser configuration, run by .github/workflows/release.yml on a version
+# tag. Try it locally with: goreleaser release --snapshot --clean
+version: 2
+
+builds:
+  - main: ./cmd/tailwise
+    binary: tailwise
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    # The same stamp as `make build` and the Dockerfile; .Version is the tag without its v.
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: checksums.txt
+
+# The notes come from CHANGELOG.md (scripts/release-notes.sh), not from GoReleaser.
+changelog:
+  disable: true
+
+release:
+  # A tag like v0.2.0-rc.1 is published as a pre-release.
+  prerelease: auto
