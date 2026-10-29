@@ -152,7 +152,7 @@ sequenceDiagram
     EW->>EW: decodeRecord(msg.Data()) → pipeline.Record
     EW->>T: Send(ctx, pipeline.Record)
     T->>B: Send(ctx, pipeline.Record)
-    Note over B: evalAttrs(Record) → eval.decision, rule, reason,<br/>cause, model, p_keep, latency
+    Note over B: evalAttrs(Record) → eval.decision, rule, reason,<br/>cause, model, p_keep, latency,<br/>flags, answers.*
     alt Record.Trace.OTLP set (came in as spans)
         B->>O: Annotate(OTLP bytes, Annotation)
     else from the JSON API

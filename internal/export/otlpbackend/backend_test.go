@@ -49,9 +49,11 @@ func TestExportKeptTrace(t *testing.T) {
 	before := time.Now()
 	err := exp.Send(context.Background(), pipeline.Record{
 		Trace:    sampleTrace(),
-		Decision: keepHigh,
+		Decision: withSeverity(keepHigh, 0.8),
 		Model:    "kev-latest",
 		Latency:  93 * time.Millisecond,
+		Answers:  map[string]pipeline.Probability{"answer_wrong": 0.95, "unsupported_answer": 0.75},
+		Flags:    []string{"answer_wrong", "unsupported_answer"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -87,6 +89,7 @@ func TestExportKeptTrace(t *testing.T) {
 		"tailwise.evidence.1":      "The Seine flows through Paris.",
 		"eval.decision":            "keep",
 		"eval.rule":                "above_threshold",
+		"eval.flags":               "answer_wrong,unsupported_answer",
 
 		"eval.model": "kev-latest",
 	}
@@ -95,7 +98,8 @@ func TestExportKeptTrace(t *testing.T) {
 			t.Errorf("root %s = %q, want %q", k, got, want)
 		}
 	}
-	for k, want := range map[string]float64{"eval.p_keep": 0.95, "eval.latency_ms": 93} {
+	for k, want := range map[string]float64{"eval.p_keep": 0.95, "eval.latency_ms": 93,
+		"eval.answers.answer_wrong": 0.95, "eval.answers.unsupported_answer": 0.75, "eval.severity": 0.8} {
 		if got := a[k].GetDoubleValue(); got != want {
 			t.Errorf("root %s = %v, want %v", k, got, want)
 		}
@@ -245,4 +249,9 @@ func TestBackendReceivesOTLP(t *testing.T) {
 			t.Errorf("OTLP payload does not contain %q", want)
 		}
 	}
+}
+
+func withSeverity(d pipeline.Decision, severity float64) pipeline.Decision {
+	d.Severity = severity
+	return d
 }

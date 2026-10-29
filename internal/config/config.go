@@ -181,8 +181,21 @@ type Manifest struct {
 	Model string `json:"model"`
 	// Questions is kept as written (compacted), so keys reach the model in order.
 	Questions json.RawMessage `json:"questions"`
+	// Decision, when set, lists more questions that decide; it stays in the
+	// engine and is not sent to the model.
+	Decision *ManifestDecision `json:"decision"`
 
 	Reasons map[string]string `json:"-"`
+}
+
+// ManifestDecision lists the yes/no questions that decide besides the
+// decision question, in priority order after it: a trace is kept when any of
+// their answers reaches its threshold.
+type ManifestDecision struct {
+	AnyOf []string `json:"any_of"`
+	// Thresholds overrides policy.keep_threshold for some of the deciding
+	// questions, the decision question included.
+	Thresholds map[string]float64 `json:"thresholds"`
 }
 
 // DefaultModel is what an agent's model starts from: the built-in scorer

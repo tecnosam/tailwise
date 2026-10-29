@@ -123,8 +123,12 @@ type recordMessage struct {
 	Rule      string      `json:"rule"`
 	Reason    string      `json:"reason"`
 	Cause     string      `json:"cause,omitempty"`
+	Severity  float64     `json:"severity,omitempty"`
 	Model     string      `json:"model"`
 	LatencyNS int64       `json:"latency_ns"`
+
+	Answers map[string]pipeline.Probability `json:"answers,omitempty"`
+	Flags   []string                        `json:"flags,omitempty"`
 }
 
 // A trace too big for the server keeps its decision but loses its original
@@ -133,7 +137,8 @@ func encodeRecord(rec pipeline.Record, maxPayload int) ([]byte, error) {
 	d := rec.Decision
 	m := recordMessage{
 		Trace: rec.Trace, Agent: string(rec.Agent), Keep: d.Keep, Scored: d.Scored, PKeep: float64(d.PKeep),
-		Rule: string(d.Rule), Reason: d.Reason, Cause: d.Cause, Model: string(rec.Model), LatencyNS: int64(rec.Latency),
+		Rule: string(d.Rule), Reason: d.Reason, Cause: d.Cause, Severity: d.Severity, Model: string(rec.Model), LatencyNS: int64(rec.Latency),
+		Answers: rec.Answers, Flags: rec.Flags,
 	}
 	data, err := json.Marshal(m)
 	if err != nil || maxPayload <= 0 || len(data) <= maxPayload || len(m.Trace.OTLP) == 0 {
@@ -153,9 +158,11 @@ func decodeRecord(data []byte) (pipeline.Record, error) {
 		Agent: pipeline.AgentLabel(m.Agent),
 		Decision: pipeline.Decision{
 			Keep: m.Keep, Scored: m.Scored, PKeep: pipeline.Probability(m.PKeep),
-			Rule: pipeline.Rule(m.Rule), Reason: m.Reason, Cause: m.Cause,
+			Rule: pipeline.Rule(m.Rule), Reason: m.Reason, Cause: m.Cause, Severity: m.Severity,
 		},
 		Model:   pipeline.ModelName(m.Model),
 		Latency: time.Duration(m.LatencyNS),
+		Answers: m.Answers,
+		Flags:   m.Flags,
 	}, nil
 }

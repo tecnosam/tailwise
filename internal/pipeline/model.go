@@ -16,6 +16,9 @@ type Model struct {
 	// Retry is used on the synchronous path only; the queued path leaves retrying
 	// to the queue, so the two never multiply.
 	Retry retry.Policy
+	// Checks are the questions that can keep a trace, in priority order. With
+	// none, p_keep alone decides.
+	Checks []Check
 	// Agent is set by Route.
 	Agent AgentLabel
 }

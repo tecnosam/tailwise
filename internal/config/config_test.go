@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tecnosam/tailwise/internal/pipeline"
 	"github.com/tecnosam/tailwise/internal/scorer"
 )
 
@@ -277,6 +278,10 @@ func TestLoadWithoutAFile(t *testing.T) {
 	if m.Client.ReasonQuestion != "why_wrong" || m.Client.Reasons["contradicts_evidence"] != "The final answer contradicts the evidence the agent gathered." {
 		t.Errorf("reason question %q, reasons %v", m.Client.ReasonQuestion, m.Client.Reasons)
 	}
+	// Any of the five checks can keep a trace, as well as answer_wrong.
+	if a := m.Client.AnyOf; len(a) != 5 || a[0] != "unsupported_answer" || a[4] != "contradicts_knowledge" {
+		t.Errorf("any_of = %q, want the five built-in checks", a)
+	}
 	t.Setenv(DefaultJevAPIKeyEnv, "")
 	if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "$JEV_API_KEY is not set") {
 		t.Errorf("no key: error = %v", err)
@@ -378,5 +383,74 @@ func TestNATSNamesFromThePrefix(t *testing.T) {
 		"TAILWISE_SPANS", "tailwise.spans", "TAILWISE_PENDING", "tailwise.pending"}
 	if !slices.Equal(got, want) {
 		t.Errorf("names = %q\nwant    %q", got, want)
+	}
+}
+
+// A manifest's decision block lists more questions that decide; it may list
+// only its own yes/no questions.
+func TestManifestDecisionAnyOf(t *testing.T) {
+	cfg, err := Load(write(t, "scorer:\n  manifest: manifest.json\n", testManifest))
+	if err != nil || cfg.Models.Default.Client.AnyOf != nil {
+		t.Fatalf("no decision block: any_of %q, error %v", cfg.Models.Default.Client.AnyOf, err)
+	}
+
+	with := func(decision string) string {
+		return `{"questions": {"answer_wrong": {"type": "noul"}, "checks": {"type": "noul"},` +
+			` "quality": {"type": "score", "criteria": ["a", "b"]}}, "decision": ` + decision + `}`
+	}
+	cfg, err = Load(write(t, "scorer:\n  manifest: manifest.json\n", with(`{"any_of": ["checks"]}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := cfg.Models.Default.Client.AnyOf; len(a) != 1 || a[0] != "checks" {
+		t.Errorf("any_of = %q", a)
+	}
+	if strings.Contains(string(cfg.Models.Default.Client.Questions), "any_of") {
+		t.Errorf("the decision block reached the questions sent to the model: %s", cfg.Models.Default.Client.Questions)
+	}
+
+	for decision, wantErr := range map[string]string{
+		`{"any_of": []}`:                        "must list questions in any_of or set thresholds",
+		`{"any_of": ["checks", "checks"]}`:      `"checks" is listed twice`,
+		`{"any_of": ["answer_wrong"]}`:          `"answer_wrong" is listed twice, or is the decision question`,
+		`{"thresholds": {"checks": 0.6}}`:       `"checks" is neither the decision question nor in any_of`,
+		`{"thresholds": {"answer_wrong": 0}}`:   "want a number in (0, 1]",
+		`{"thresholds": {"answer_wrong": 1.5}}`: "want a number in (0, 1]",
+		`{"any_of": ["tone"]}`:                  `question "tone" not found`,
+		`{"any_of": ["quality"]}`:               `question "quality" has type "score", want "noul"`,
+	} {
+		if _, err := Load(write(t, "scorer:\n  manifest: manifest.json\n", with(decision))); err == nil || !strings.Contains(err.Error(), wantErr) {
+			t.Errorf("%s: error = %v, want %q", decision, err, wantErr)
+		}
+	}
+}
+
+// The deciding questions become checks in priority order, the decision
+// question first, weighted by rank, each with its own threshold or none.
+func TestManifestDecisionChecks(t *testing.T) {
+	manifest := `{"questions": {"answer_wrong": {"type": "noul"}, "a": {"type": "noul"}, "b": {"type": "noul"}},` +
+		` "decision": {"any_of": ["b", "a"], "thresholds": {"answer_wrong": 0.8, "a": 0.6}}}`
+	cfg, err := Load(write(t, "scorer:\n  manifest: manifest.json\n", manifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := cfg.Models.Default.Checks
+	if len(checks) != 3 || checks[0].Question != "answer_wrong" || checks[1].Question != "b" || checks[2].Question != "a" {
+		t.Fatalf("checks = %+v, want answer_wrong, then any_of in order", checks)
+	}
+	if checks[0].Threshold != 0.8 || checks[1].Threshold != 0 || checks[2].Threshold != 0.6 {
+		t.Errorf("thresholds = %v %v %v, want 0.8, the policy's (0) and 0.6", checks[0].Threshold, checks[1].Threshold, checks[2].Threshold)
+	}
+	if !(checks[0].Weight > checks[1].Weight && checks[1].Weight > checks[2].Weight) {
+		t.Errorf("weights = %v %v %v, want them falling with priority", checks[0].Weight, checks[1].Weight, checks[2].Weight)
+	}
+
+	// Without a decision block, the decision question is the one check.
+	cfg, err = Load(write(t, "scorer:\n  manifest: manifest.json\n", testManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := cfg.Models.Default.Checks; len(c) != 1 || c[0] != (pipeline.Check{Question: "answer_wrong", Weight: 1}) {
+		t.Errorf("checks = %+v, want answer_wrong alone with weight 1", c)
 	}
 }

@@ -24,13 +24,20 @@ const (
 )
 
 type Score struct {
-	P       Probability // that the final answer is wrong
+	// P is p_keep: the highest answer among the questions that decide, the
+	// decision question alone unless the manifest lists more.
+	P       Probability
 	Model   ModelName
 	Latency time.Duration // as the server reported it, else the round trip
 	// Cause is the model's choice for the reason question, Explanation its
 	// plain-English description; both empty when it gave none.
 	Cause       string
 	Explanation string
+	// Answers holds every yes/no (noul) answer the model gave, by question.
+	Answers map[string]Probability
+	// Deciding holds the answers of the questions that decide; P is their
+	// highest.
+	Deciding map[string]Probability
 }
 
 type Decision struct {
@@ -45,6 +52,9 @@ type Decision struct {
 	Reason string
 	// Cause is bounded by the manifest, so safe as a metric attribute.
 	Cause string
+	// Severity is the sum of the flagged checks' weight × answer: higher for
+	// more, and higher-priority, problems. 0 when nothing was flagged.
+	Severity float64
 }
 
 type Record struct {
@@ -53,6 +63,11 @@ type Record struct {
 	Decision Decision
 	Model    ModelName
 	Latency  time.Duration
+	// Answers are the model's yes/no answers, none on fallback.
+	Answers map[string]Probability
+	// Flags names the checks whose answer reached their threshold, in
+	// priority order: the problems the model found.
+	Flags []string
 }
 
 type Outcome struct {

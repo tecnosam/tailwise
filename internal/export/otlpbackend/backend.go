@@ -7,6 +7,8 @@ import (
 	"crypto/rand"
 	"fmt"
 	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -107,6 +109,13 @@ func evalAttrs(rec pipeline.Record) []*commonpb.KeyValue {
 	}
 	if d.Scored {
 		attrs = append(attrs, otlp.FloatAttr("eval.p_keep", float64(d.PKeep)))
+	}
+	if len(rec.Flags) > 0 {
+		attrs = append(attrs, otlp.StringAttr("eval.flags", strings.Join(rec.Flags, ",")),
+			otlp.FloatAttr("eval.severity", d.Severity))
+	}
+	for _, q := range slices.Sorted(maps.Keys(rec.Answers)) {
+		attrs = append(attrs, otlp.FloatAttr("eval.answers."+q, float64(rec.Answers[q])))
 	}
 	return attrs
 }

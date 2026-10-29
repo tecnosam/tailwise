@@ -262,17 +262,82 @@ A manifest holds the questions the model is asked:
 ```
 
 - `questions` is sent to the model unchanged, all questions, in the
-  manifest's order. The decision question's answer is `p_keep`, and the
-  reason question's chosen option is the `reason`.
+  manifest's order, in one call. The reason question's chosen option is the
+  `reason`.
+- `decision`, optional, lists more yes/no (`noul`) questions that can keep a
+  trace (see [Any question can keep a trace](#any-question-can-keep-a-trace)).
+  Without it, the decision question decides alone. It stays in the engine
+  and is not sent to the model.
 - A relative `scorer.manifest` path resolves against the config file's
   directory.
 
 A manifest is optional, for every System One model. Without one the model
-is asked the built-in questions (`answer_wrong`, and `why_wrong` for the
-reason), and the engine logs a warning at start-up. To word the questions
+is asked the built-in questions
+([`builtin_manifest.json`](internal/config/builtin_manifest.json)), and the
+engine logs a warning at start-up. They are:
+
+| Question | Asks |
+| --- | --- |
+| `answer_wrong` | Is the final answer wrong or only partially correct? |
+| `unsupported_answer` | Does it make claims the evidence does not support? |
+| `missing_tool_calls` | Did the agent skip lookups the task needed? |
+| `answered_on_failure` | Did it answer despite a failed or partial tool call? |
+| `ignored_instructions` | Does it go against the user's instructions? |
+| `contradicts_knowledge` | Does it contradict general knowledge? |
+| `why_wrong` | Which [reason](#reasons) explains what is wrong? |
+
+Each yes/no answer is the probability that the agent failed in that way, and
+any of them can keep the trace. To word the questions
 for your agent, start from
 [`examples/manifests/my-agent.json`](examples/manifests/my-agent.json) and
 set `scorer.manifest` (or `TAILWISE_MANIFEST`).
+
+### Any question can keep a trace
+
+A manifest's `decision` block lists the yes/no questions that can keep a
+trace besides the decision question, in priority order, and can give any of
+them its own threshold:
+
+```json
+"decision": {
+  "any_of": ["unsupported_answer", "missing_tool_calls", "answered_on_failure",
+             "ignored_instructions", "contradicts_knowledge"],
+  "thresholds": {"contradicts_knowledge": 0.7}
+}
+```
+
+- **Any question keeps.** A trace is kept when the decision question, or any
+  question in `any_of`, reaches its threshold. Each question checks a
+  different way an agent fails, and a wrong answer usually fails in one way
+  only: a check that says "no" is not evidence the answer is right, so it
+  never counts against keeping.
+- **Thresholds.** `thresholds` sets a question's own threshold, in (0, 1];
+  a question without one uses `policy.keep_threshold`. Raise it for a check
+  that flags too often. The decision question can have one too.
+- **Flags.** The questions that reached their threshold are the trace's
+  flags: the problems the model found, in priority order. They are in the
+  decision log line (`flags`) and on the exported trace (`eval.flags`), next
+  to every answer (`eval.answers.<question>`). A reviewer can filter on them,
+  for example every kept trace flagged `answered_on_failure`.
+- **Priority and severity.** The decision question always ranks first, then
+  `any_of` in the order written. Ranks become weights that sum to 1, falling
+  steeply from the top ([rank-order centroid](https://doi.org/10.1287/mnsc.42.11.1515)
+  weights: with all six built-in questions, 0.41, 0.24, 0.16, 0.10, 0.06 and
+  0.03). A trace's **severity** is the sum of weight × answer over its flags:
+  higher for more problems, and for higher-priority ones. It does not change
+  whether a trace is kept; it ranks kept traces for review (`severity` in the
+  log, `eval.severity` on the export).
+- `p_keep` is the highest answer among the deciding questions.
+- Every listed question must be a `noul` question of the same manifest,
+  listed once, and the model must answer all of them: a missing answer is a
+  scoring error, like a missing decision answer. Questions not listed are
+  still asked, logged and exported, but do not keep a trace.
+- Each listed question is one more way to be kept, so listing more keeps more
+  traces. Recheck the share kept after changing the list, a threshold or a
+  question's wording.
+
+Without a `decision` block, the decision question decides alone, against
+`policy.keep_threshold`.
 
 ### One model per agent
 
@@ -566,12 +631,18 @@ so it does not take the engine out of a load balancer; watch
    queue for redelivery. On the synchronous endpoint, which has no queue,
    the engine retries it with `scorer.max_retries` and jittered
    `scorer.backoff`. The two kinds of retry never multiply.
-4. **Decide.** `p_keep` is the model's answer to the decision question.
-   - `p_keep >= keep_threshold`: keep, rule `above_threshold`.
+4. **Decide.** The trace is kept when any question that decides (the
+   decision question, and those in the manifest's `decision.any_of`)
+   reaches its threshold; those questions are its flags (see
+   [Any question can keep a trace](#any-question-can-keep-a-trace)).
+   - A question reached its threshold: keep, rule `above_threshold`.
    - Otherwise keep with probability `random_floor`, rule `random_floor`.
    - Otherwise drop, rule `below_threshold`.
 5. **Export.** Kept traces are queued to every exporter. Each decision produces one JSON log
-   line with `trace_id`, `agent`, `decision`, `rule`, `reason`, `cause`, `p_keep`, `model` and `latency_ms`.
+   line with `trace_id`, `agent`, `decision`, `rule`, `reason`, `cause`, `p_keep`, `model`, `latency_ms`,
+   `answers`, every yes/no answer by question, `flags`, the deciding
+   questions that reached their threshold, and `severity`, as in
+   `"answers": {"answer_wrong": 0.91, "unsupported_answer": 0.84, ...}, "flags": ["answer_wrong", "unsupported_answer"], "severity": 0.57`.
 
 ### Reasons
 
@@ -844,7 +915,10 @@ Root span attributes:
 | `eval.cause` | string | both | The model's short name for the reason, e.g. `contradicts_evidence`; omitted when it gave none |
 | `eval.model` | string | both | The scorer model that decided |
 | `eval.latency_ms` | double | both | Scoring time in milliseconds |
-| `eval.p_keep` | double | both | The model's probability that the answer is wrong; omitted on a fallback keep |
+| `eval.p_keep` | double | both | The highest answer among the questions that decide; omitted on a fallback keep |
+| `eval.flags` | string | both | The deciding questions that reached their threshold, comma-separated in priority order, e.g. `answer_wrong,unsupported_answer`; omitted when none did |
+| `eval.severity` | double | both | Sum of priority weight × answer over the flags; omitted when there are none |
+| `eval.answers.<question>` | double | both | Each yes/no answer, e.g. `eval.answers.missing_tool_calls`; omitted on a fallback keep |
 
 Tool span attributes (rebuilt traces only; forwarded tool spans are not
 changed):
@@ -950,8 +1024,12 @@ These are open problems in the current version, not design choices to rely on.
   98% dropped with the default `random_floor`, and only `WARN` log lines show
   it.
 - **Decisions use the model's probabilities as they come.** Nothing tunes
-  them to your agent, so `keep_threshold` may keep too much or too little at
-  first. Watch the share of traces kept and adjust the threshold.
+  them to your agent, and any of six questions can keep a trace, so the
+  defaults may keep too much at first. Watch the share of traces kept, and
+  which flags keep them, and adjust `decision.thresholds` or the `any_of`
+  list.
+- **Severity ranks traces but nothing acts on it yet.** Exporters send kept
+  traces in the order they are decided, not by severity.
 - **Every scored trace is a billed call to Jev, and leaves your network.**
   Nothing caps the spend or redacts fields before sending; only
   `server.workers` limits the rate.

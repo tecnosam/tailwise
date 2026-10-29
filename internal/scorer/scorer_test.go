@@ -378,3 +378,31 @@ func TestScoreReadsTheReason(t *testing.T) {
 		}
 	}
 }
+
+// Every yes/no answer is kept. p_keep is the highest answer among the
+// questions that decide: the decision question, and any listed in AnyOf.
+func TestScoreKeepsTheAnswersAndTakesTheHighest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"answers": {"answer_wrong": {"type": "noul", "noul": 0.2}, "unsupported_answer": {"type": "noul", "noul": 0.8},` +
+			` "answers_question": {"type": "score", "score": 1.2}, "bad": {"type": "noul", "noul": 3}}}`))
+	}))
+	defer srv.Close()
+
+	res, err := newClient(t, srv.URL, nil).Score(context.Background(), "s")
+	if err != nil || res.P != 0.2 || len(res.Deciding) != 1 {
+		t.Fatalf("decision question alone: %+v, %v", res, err)
+	}
+	if len(res.Answers) != 2 || res.Answers["answer_wrong"] != 0.2 || res.Answers["unsupported_answer"] != 0.8 {
+		t.Errorf("answers = %v, want the two well-formed yes/no answers", res.Answers)
+	}
+
+	anyOf := newClient(t, srv.URL, func(cfg *Config) { cfg.AnyOf = []string{"unsupported_answer"} })
+	if res, err = anyOf.Score(context.Background(), "s"); err != nil || res.P != 0.8 || len(res.Deciding) != 2 {
+		t.Errorf("with any_of: %+v, %v; want p_keep 0.8 from two deciding answers", res, err)
+	}
+
+	missing := newClient(t, srv.URL, func(cfg *Config) { cfg.AnyOf = []string{"missing_tool_calls"} })
+	if _, err = missing.Score(context.Background(), "s"); err == nil || !strings.Contains(err.Error(), `no answer for "missing_tool_calls"`) {
+		t.Errorf("a deciding question without an answer: error = %v", err)
+	}
+}

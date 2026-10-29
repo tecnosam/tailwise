@@ -1,10 +1,30 @@
 {
   "model": "jev-latest",
-  "note": "A manifest for your agent: the questions it is asked. answer_wrong decides keep or drop, and why_wrong picks the plain-English reason; word both for your agent.",
+  "note": "A manifest for your agent: the questions it is asked, all in one call. A trace is kept when answer_wrong, or any question in decision.any_of, reaches its threshold (decision.thresholds, else policy.keep_threshold); any_of is in priority order after answer_wrong, which ranks how severe a trace's problems are. why_wrong picks the plain-English reason. Word them all for your agent.",
   "questions": {
     "answer_wrong": {
       "type": "noul",
       "instructions": "Is the final answer wrong or only partially correct for the user's question?"
+    },
+    "unsupported_answer": {
+      "type": "noul",
+      "instructions": "Does the final answer make claims that the evidence the agent gathered does not support?"
+    },
+    "missing_tool_calls": {
+      "type": "noul",
+      "instructions": "Did the agent leave out tool calls the task needed, so it answered without information it should have looked up?"
+    },
+    "answered_on_failure": {
+      "type": "noul",
+      "instructions": "Did the agent answer even though a tool call failed or returned only partial results?"
+    },
+    "ignored_instructions": {
+      "type": "noul",
+      "instructions": "Does the final answer ignore or go against instructions given in the user's question?"
+    },
+    "contradicts_knowledge": {
+      "type": "noul",
+      "instructions": "Does the final answer contradict well-established general knowledge?"
     },
     "why_wrong": {
       "type": "choice",
@@ -18,6 +38,18 @@
         "ignored_tool_failure": "A tool call failed and the agent answered anyway without the information it needed.",
         "no_answer": "The agent did not give an answer."
       }
+    }
+  },
+  "decision": {
+    "any_of": [
+      "unsupported_answer",
+      "missing_tool_calls",
+      "answered_on_failure",
+      "ignored_instructions",
+      "contradicts_knowledge"
+    ],
+    "thresholds": {
+      "contradicts_knowledge": 0.7
     }
   }
 }

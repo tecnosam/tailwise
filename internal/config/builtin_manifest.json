@@ -1,10 +1,30 @@
 {
   "model": "built-in",
-  "note": "The questions the engine asks when a model has no manifest of its own: answer_wrong decides keep or drop, and why_wrong picks the plain-English reason.",
+  "note": "The questions the engine asks when a model has no manifest of its own, all in one call. A trace is kept when answer_wrong, or any question in decision.any_of, reaches the keep threshold; any_of is in priority order after answer_wrong. why_wrong picks the plain-English reason.",
   "questions": {
     "answer_wrong": {
       "type": "noul",
       "instructions": "Is the final answer wrong or only partially correct for the user's question?"
+    },
+    "unsupported_answer": {
+      "type": "noul",
+      "instructions": "Does the final answer make claims that the evidence the agent gathered does not support?"
+    },
+    "missing_tool_calls": {
+      "type": "noul",
+      "instructions": "Did the agent leave out tool calls the task needed, so it answered without information it should have looked up?"
+    },
+    "answered_on_failure": {
+      "type": "noul",
+      "instructions": "Did the agent answer even though a tool call failed or returned only partial results?"
+    },
+    "ignored_instructions": {
+      "type": "noul",
+      "instructions": "Does the final answer ignore or go against instructions given in the user's question?"
+    },
+    "contradicts_knowledge": {
+      "type": "noul",
+      "instructions": "Does the final answer contradict well-established general knowledge?"
     },
     "why_wrong": {
       "type": "choice",
@@ -19,5 +39,14 @@
         "no_answer": "The agent did not give an answer."
       }
     }
+  },
+  "decision": {
+    "any_of": [
+      "unsupported_answer",
+      "missing_tool_calls",
+      "answered_on_failure",
+      "ignored_instructions",
+      "contradicts_knowledge"
+    ]
   }
 }
