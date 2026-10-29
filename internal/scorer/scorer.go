@@ -30,9 +30,9 @@ type Config struct {
 	Model            string
 	Questions        json.RawMessage
 	DecisionQuestion string
-	// Pool, when set, combines the yes/no answers into p_keep; without it
-	// p_keep is the decision question's answer.
-	Pool *pipeline.Pool
+	// AnyOf lists the yes/no questions that decide: p_keep is their highest
+	// answer. Empty, the decision question decides alone.
+	AnyOf []string
 	// Reasons maps each option of the reason question to the plain-English
 	// sentence that becomes the decision's reason.
 	ReasonQuestion string
@@ -162,12 +162,16 @@ func (c *Client) parse(raw []byte, elapsed time.Duration) (pipeline.Score, error
 		return pipeline.Score{}, err
 	}
 	answers := noulAnswers(out)
-	if c.cfg.Pool != nil {
-		if p, err = c.cfg.Pool.Combine(answers); err != nil {
-			return pipeline.Score{}, err
+	deciding := map[string]pipeline.Probability{c.cfg.DecisionQuestion: p}
+	for _, q := range c.cfg.AnyOf {
+		a, ok := answers[q]
+		if !ok {
+			return pipeline.Score{}, fmt.Errorf("model response has no answer for %q", q)
 		}
+		deciding[q] = a
+		p = max(p, a)
 	}
-	score := pipeline.Score{P: p, Answers: answers, Model: c.modelName(out), Latency: reportedLatency(out, elapsed)}
+	score := pipeline.Score{P: p, Answers: answers, Deciding: deciding, Model: c.modelName(out), Latency: reportedLatency(out, elapsed)}
 	score.Cause, score.Explanation = c.reasonAnswer(out)
 	return score, nil
 }

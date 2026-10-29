@@ -6,8 +6,8 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
+	"slices"
 
 	"github.com/tecnosam/tailwise/internal/pipeline"
 )
@@ -102,37 +102,65 @@ func (m *Manifest) prepare(decisionQuestion string) error {
 	if head.Type != questionTypeNoul {
 		return fmt.Errorf("decision question %q has type %q, want %q", decisionQuestion, head.Type, questionTypeNoul)
 	}
-	return m.checkDecision(questions)
+	return m.checkDecision(questions, decisionQuestion)
 }
 
-// checkDecision accepts a decision block whose weights name only yes/no
-// questions of the manifest.
-func (m *Manifest) checkDecision(questions map[string]json.RawMessage) error {
+// checkDecision accepts a decision block that lists only yes/no questions of
+// the manifest, each once, and sets thresholds only for questions that decide.
+func (m *Manifest) checkDecision(questions map[string]json.RawMessage, decisionQuestion string) error {
 	if m.Decision == nil {
 		return nil
 	}
-	if len(m.Decision.Weights) == 0 {
-		return fmt.Errorf("\"decision.weights\" must weight at least one question")
+	if len(m.Decision.AnyOf) == 0 && len(m.Decision.Thresholds) == 0 {
+		return fmt.Errorf("\"decision\" must list questions in any_of or set thresholds")
 	}
-	for q := range m.Decision.Weights {
+	deciding := map[string]bool{decisionQuestion: true}
+	for _, q := range m.Decision.AnyOf {
+		if deciding[q] {
+			return fmt.Errorf("decision.any_of: question %q is listed twice, or is the decision question, which always comes first", q)
+		}
+		deciding[q] = true
 		raw, ok := questions[q]
 		if !ok {
-			return fmt.Errorf("decision.weights: question %q not found in questions", q)
+			return fmt.Errorf("decision.any_of: question %q not found in questions", q)
 		}
 		var head struct {
 			Type string `json:"type"`
 		}
 		if err := json.Unmarshal(raw, &head); err != nil || head.Type != questionTypeNoul {
-			return fmt.Errorf("decision.weights: question %q has type %q, want %q", q, head.Type, questionTypeNoul)
+			return fmt.Errorf("decision.any_of: question %q has type %q, want %q", q, head.Type, questionTypeNoul)
+		}
+	}
+	for q, t := range m.Decision.Thresholds {
+		if !deciding[q] {
+			return fmt.Errorf("decision.thresholds: question %q is neither the decision question nor in any_of", q)
+		}
+		if t <= 0 || t > 1 {
+			return fmt.Errorf("decision.thresholds: %q is %v, want a number in (0, 1]", q, t)
 		}
 	}
 	return nil
 }
 
-// pool is the decision block as the scorer uses it, nil without one.
-func (m *Manifest) pool() *pipeline.Pool {
+// anyOf is the decision block's questions, none without one.
+func (m *Manifest) anyOf() []string {
 	if m.Decision == nil {
 		return nil
 	}
-	return &pipeline.Pool{Intercept: m.Decision.Intercept, Weights: maps.Clone(m.Decision.Weights)}
+	return slices.Clone(m.Decision.AnyOf)
+}
+
+// checks are the questions that decide, the decision question first and then
+// any_of in order, weighted by that priority.
+func (m *Manifest) checks(decisionQuestion string) []pipeline.Check {
+	questions := append([]string{decisionQuestion}, m.anyOf()...)
+	weights := pipeline.PriorityWeights(len(questions))
+	checks := make([]pipeline.Check, len(questions))
+	for i, q := range questions {
+		checks[i] = pipeline.Check{Question: q, Weight: weights[i]}
+		if m.Decision != nil {
+			checks[i].Threshold = pipeline.Probability(m.Decision.Thresholds[q])
+		}
+	}
+	return checks
 }

@@ -12,6 +12,8 @@ type ModelConfig struct {
 	Client Config
 	// Retry is how the synchronous endpoint retries a failed call.
 	Retry retry.Policy
+	// Checks are the questions that can keep a trace, in priority order.
+	Checks []pipeline.Check
 }
 
 type Models struct {
@@ -38,5 +40,5 @@ func buildModel(mc ModelConfig) (pipeline.Model, error) {
 	if err != nil {
 		return pipeline.Model{}, err
 	}
-	return pipeline.Model{Name: pipeline.ModelName(mc.Client.Model), Scorer: s, Retry: mc.Retry}, nil
+	return pipeline.Model{Name: pipeline.ModelName(mc.Client.Model), Scorer: s, Retry: mc.Retry, Checks: mc.Checks}, nil
 }

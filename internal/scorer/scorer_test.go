@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	"github.com/tecnosam/tailwise/internal/fault"
-	"github.com/tecnosam/tailwise/internal/pipeline"
 )
 
 const questions = `{"answer_wrong":{"type":"noul","instructions":"Is the final answer wrong?"},"answers_question":{"type":"score","instructions":"How good?","criteria":["Wrong","Fully correct"]}}`
@@ -381,34 +379,30 @@ func TestScoreReadsTheReason(t *testing.T) {
 	}
 }
 
-// Every yes/no answer is kept; with a pool, p_keep combines them, and without
-// one it is the decision question's answer.
-func TestScoreKeepsAndPoolsTheAnswers(t *testing.T) {
+// Every yes/no answer is kept. p_keep is the highest answer among the
+// questions that decide: the decision question, and any listed in AnyOf.
+func TestScoreKeepsTheAnswersAndTakesTheHighest(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"answers": {"answer_wrong": {"type": "noul", "noul": 0.9}, "unsupported_answer": {"type": "noul", "noul": 0.1},` +
+		w.Write([]byte(`{"answers": {"answer_wrong": {"type": "noul", "noul": 0.2}, "unsupported_answer": {"type": "noul", "noul": 0.8},` +
 			` "answers_question": {"type": "score", "score": 1.2}, "bad": {"type": "noul", "noul": 3}}}`))
 	}))
 	defer srv.Close()
 
 	res, err := newClient(t, srv.URL, nil).Score(context.Background(), "s")
-	if err != nil || res.P != 0.9 {
-		t.Fatalf("without a pool: %+v, %v", res, err)
+	if err != nil || res.P != 0.2 || len(res.Deciding) != 1 {
+		t.Fatalf("decision question alone: %+v, %v", res, err)
 	}
-	if len(res.Answers) != 2 || res.Answers["answer_wrong"] != 0.9 || res.Answers["unsupported_answer"] != 0.1 {
+	if len(res.Answers) != 2 || res.Answers["answer_wrong"] != 0.2 || res.Answers["unsupported_answer"] != 0.8 {
 		t.Errorf("answers = %v, want the two well-formed yes/no answers", res.Answers)
 	}
 
-	pooled := newClient(t, srv.URL, func(cfg *Config) {
-		cfg.Pool = &pipeline.Pool{Weights: map[string]float64{"answer_wrong": 0.5, "unsupported_answer": 0.5}}
-	})
-	if res, err = pooled.Score(context.Background(), "s"); err != nil || math.Abs(float64(res.P)-0.5) > 1e-9 {
-		t.Errorf("with a pool: %+v, %v; want p_keep 0.5", res, err)
+	anyOf := newClient(t, srv.URL, func(cfg *Config) { cfg.AnyOf = []string{"unsupported_answer"} })
+	if res, err = anyOf.Score(context.Background(), "s"); err != nil || res.P != 0.8 || len(res.Deciding) != 2 {
+		t.Errorf("with any_of: %+v, %v; want p_keep 0.8 from two deciding answers", res, err)
 	}
 
-	missing := newClient(t, srv.URL, func(cfg *Config) {
-		cfg.Pool = &pipeline.Pool{Weights: map[string]float64{"answer_wrong": 0.5, "missing_tool_calls": 0.5}}
-	})
+	missing := newClient(t, srv.URL, func(cfg *Config) { cfg.AnyOf = []string{"missing_tool_calls"} })
 	if _, err = missing.Score(context.Background(), "s"); err == nil || !strings.Contains(err.Error(), `no answer for "missing_tool_calls"`) {
-		t.Errorf("a weighted question without an answer: error = %v", err)
+		t.Errorf("a deciding question without an answer: error = %v", err)
 	}
 }

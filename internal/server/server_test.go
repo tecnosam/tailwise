@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -657,10 +658,13 @@ func TestDecisionLogLine(t *testing.T) {
 	var buf strings.Builder
 	answered := func(context.Context, trace.State) (pipeline.Score, error) {
 		return pipeline.Score{P: 0.9, Model: "kev-latest", Latency: 12 * time.Millisecond,
-			Answers: map[string]pipeline.Probability{"answer_wrong": 0.95, "unsupported_answer": 0.7}}, nil
+			Answers:  map[string]pipeline.Probability{"answer_wrong": 0.95, "unsupported_answer": 0.7, "missing_tool_calls": 0.1},
+			Deciding: map[string]pipeline.Probability{"answer_wrong": 0.95, "unsupported_answer": 0.7, "missing_tool_calls": 0.1}}, nil
 	}
+	checks := []pipeline.Check{{Question: "answer_wrong", Weight: 0.6}, {Question: "unsupported_answer", Weight: 0.3},
+		{Question: "missing_tool_calls", Weight: 0.1}}
 	h := newHarness(t, harnessOpts{
-		scorer: &fakeScorer{score: answered},
+		models: pipeline.SingleModel(pipeline.Model{Name: "kev-latest", Scorer: &fakeScorer{score: answered}, Checks: checks}),
 		logger: jsonLogger(&buf),
 	})
 	h.do("POST", "/v1/traces:score", `{"trace_id": "log-1", "question": "q", "final_answer": "a"}`)
@@ -682,6 +686,12 @@ func TestDecisionLogLine(t *testing.T) {
 	answers, _ := line["answers"].(map[string]any)
 	if answers["answer_wrong"] != 0.95 || answers["unsupported_answer"] != 0.7 {
 		t.Errorf("log field answers = %v, want every yes/no answer", line["answers"])
+	}
+	if flags, _ := json.Marshal(line["flags"]); string(flags) != `["answer_wrong","unsupported_answer"]` {
+		t.Errorf("log field flags = %s, want the deciding questions at or above the threshold", flags)
+	}
+	if s, _ := line["severity"].(float64); math.Abs(s-(0.6*0.95+0.3*0.7)) > 1e-9 {
+		t.Errorf("log field severity = %v, want the flagged checks' weight × answer", line["severity"])
 	}
 }
 

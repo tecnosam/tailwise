@@ -1,6 +1,6 @@
 {
   "model": "built-in",
-  "note": "The questions the engine asks when a model has no manifest of its own, all in one call: answer_wrong and the five checks after it are combined into p_keep with the weights in decision, and why_wrong picks the plain-English reason.",
+  "note": "The questions the engine asks when a model has no manifest of its own, all in one call. A trace is kept when answer_wrong, or any question in decision.any_of, reaches the keep threshold; any_of is in priority order after answer_wrong. why_wrong picks the plain-English reason.",
   "questions": {
     "answer_wrong": {
       "type": "noul",
@@ -41,14 +41,12 @@
     }
   },
   "decision": {
-    "intercept": 0,
-    "weights": {
-      "answer_wrong": 0.5,
-      "unsupported_answer": 0.1,
-      "missing_tool_calls": 0.1,
-      "answered_on_failure": 0.1,
-      "ignored_instructions": 0.1,
-      "contradicts_knowledge": 0.1
-    }
+    "any_of": [
+      "unsupported_answer",
+      "missing_tool_calls",
+      "answered_on_failure",
+      "ignored_instructions",
+      "contradicts_knowledge"
+    ]
   }
 }

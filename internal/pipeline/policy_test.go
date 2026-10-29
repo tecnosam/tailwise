@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"math"
+	"slices"
 	"testing"
 )
 
@@ -96,5 +98,68 @@ func TestDefaultRandomSourceRate(t *testing.T) {
 	}
 	if rate := float64(kept) / n; rate < 0.17 || rate > 0.23 {
 		t.Errorf("random-floor keep rate = %.3f, want about 0.20", rate)
+	}
+}
+
+func TestPriorityWeights(t *testing.T) {
+	for n, want := range map[int][]float64{
+		1: {1},
+		2: {0.75, 0.25},
+		3: {0.611, 0.278, 0.111},
+	} {
+		got := PriorityWeights(n)
+		sum := 0.0
+		for i := range got {
+			sum += got[i]
+			if math.Abs(got[i]-want[i]) > 1e-3 {
+				t.Errorf("PriorityWeights(%d) = %v, want %v", n, got, want)
+				break
+			}
+		}
+		if math.Abs(sum-1) > 1e-9 {
+			t.Errorf("PriorityWeights(%d) sums to %v, want 1", n, sum)
+		}
+	}
+}
+
+// Any check reaching its own threshold keeps the trace and flags it; the
+// flagged checks' weight × answer add up to its severity.
+func TestDecideChecks(t *testing.T) {
+	checks := []Check{
+		{Question: "answer_wrong", Weight: 0.6},
+		{Question: "unsupported", Threshold: 0.8, Weight: 0.3},
+		{Question: "missing_tools", Weight: 0.1},
+	}
+	tests := []struct {
+		name         string
+		answers      map[string]Probability
+		draw         []float64
+		wantRule     Rule
+		wantFlags    []string
+		wantSeverity float64
+	}{
+		{"one low-priority check", map[string]Probability{"answer_wrong": 0.2, "unsupported": 0.1, "missing_tools": 0.9},
+			nil, RuleAboveThreshold, []string{"missing_tools"}, 0.09},
+		{"flags in priority order", map[string]Probability{"answer_wrong": 0.5, "unsupported": 0.9, "missing_tools": 1},
+			nil, RuleAboveThreshold, []string{"answer_wrong", "unsupported", "missing_tools"}, 0.3 + 0.27 + 0.1},
+		{"below its own threshold", map[string]Probability{"answer_wrong": 0.2, "unsupported": 0.7, "missing_tools": 0.1},
+			[]float64{0.9}, RuleBelowThreshold, []string{}, 0},
+		{"random floor keeps with no flags", map[string]Probability{"answer_wrong": 0.2, "unsupported": 0.1, "missing_tools": 0.1},
+			[]float64{0.01}, RuleRandomFloor, []string{}, 0},
+	}
+	for _, tt := range tests {
+		rnd, _ := fixed(t, tt.draw...)
+		d, flags := NewPolicy(testConfig, rnd).DecideChecks(0.9, checks, tt.answers)
+		if d.Rule != tt.wantRule || !slices.Equal(flags, tt.wantFlags) || math.Abs(d.Severity-tt.wantSeverity) > 1e-9 {
+			t.Errorf("%s: rule %s, flags %q, severity %v; want %s, %q, %v", tt.name, d.Rule, flags, d.Severity, tt.wantRule, tt.wantFlags, tt.wantSeverity)
+		}
+		if !d.Scored || d.PKeep != 0.9 {
+			t.Errorf("%s: p_keep not recorded: %+v", tt.name, d)
+		}
+	}
+
+	// With no checks, p_keep alone decides.
+	if d, flags := NewPolicy(testConfig, nil).DecideChecks(0.6, nil, nil); !d.Keep || d.Rule != RuleAboveThreshold || flags != nil {
+		t.Errorf("no checks: %+v, flags %q", d, flags)
 	}
 }

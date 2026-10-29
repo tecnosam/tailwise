@@ -140,13 +140,14 @@ func model(s Scorer, apiKey string, m *Manifest) scorer.ModelConfig {
 			Model:            s.Model,
 			Questions:        m.Questions,
 			DecisionQuestion: s.DecisionQuestion,
-			Pool:             m.pool(),
+			AnyOf:            m.anyOf(),
 			ReasonQuestion:   reasonQuestion(s, m),
 			Reasons:          m.Reasons,
 			APIKey:           apiKey,
 			Timeout:          s.Timeout,
 		},
-		Retry: retry.Policy{Attempts: s.MaxRetries + 1, Backoff: s.Backoff, Jitter: true},
+		Retry:  retry.Policy{Attempts: s.MaxRetries + 1, Backoff: s.Backoff, Jitter: true},
+		Checks: m.checks(s.DecisionQuestion),
 	}
 }
 

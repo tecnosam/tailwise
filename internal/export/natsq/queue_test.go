@@ -3,6 +3,8 @@ package natsq
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -105,9 +107,11 @@ func TestRecordSurvivesTheStream(t *testing.T) {
 	want := pipeline.Record{
 		Trace:    trace.Trace{TraceID: "t1", Agent: "support-bot", Question: "q", FinalAnswer: "a", OTLP: []byte{1, 2, 3}},
 		Agent:    "support-bot",
-		Decision: keepHigh,
+		Decision: pipeline.Decision{Keep: true, Scored: true, PKeep: 0.95, Rule: pipeline.RuleAboveThreshold, Severity: 0.57},
 		Model:    "kev-latest",
 		Latency:  93 * time.Millisecond,
+		Answers:  map[string]pipeline.Probability{"answer_wrong": 0.95, "unsupported_answer": 0.75},
+		Flags:    []string{"answer_wrong", "unsupported_answer"},
 	}
 	if err := q.Enqueue(context.Background(), want); err != nil {
 		t.Fatal(err)
@@ -115,7 +119,8 @@ func TestRecordSurvivesTheStream(t *testing.T) {
 	select {
 	case rec := <-got:
 		if rec.Trace.TraceID != "t1" || rec.Trace.Agent != "support-bot" || rec.Agent != "support-bot" || string(rec.Trace.OTLP) != "\x01\x02\x03" ||
-			rec.Decision != want.Decision || rec.Model != want.Model || rec.Latency != want.Latency {
+			rec.Decision != want.Decision || rec.Model != want.Model || rec.Latency != want.Latency ||
+			!maps.Equal(rec.Answers, want.Answers) || !slices.Equal(rec.Flags, want.Flags) {
 			t.Errorf("received %+v, want %+v", rec, want)
 		}
 	case <-time.After(10 * time.Second):
