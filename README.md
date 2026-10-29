@@ -65,8 +65,34 @@ Requirements:
 
 - A Jev API key, in `JEV_API_KEY`
 - Docker, to run the engine, NATS and Phoenix with Compose
-- Go 1.26 or newer, to build or test outside Docker
+- Go 1.26 or newer, to build or test outside Docker (not for a release binary)
 - Python 3, only for `make samples`
+
+### From a release binary
+
+Every release on [GitHub Releases](https://github.com/tecnosam/tailwise/releases)
+has a `tailwise` binary for Linux, macOS and Windows, each on amd64 and
+arm64, and a `checksums.txt`. The binary needs nothing else: the queues run
+inside it unless `queue.url` names a NATS server.
+
+```sh
+VERSION=0.1.0 OS=linux ARCH=amd64   # OS: linux, darwin; ARCH: amd64, arm64
+BASE=https://github.com/tecnosam/tailwise/releases/download/v$VERSION
+curl -fsSLO "$BASE/tailwise_${VERSION}_${OS}_${ARCH}.tar.gz"
+curl -fsSLO "$BASE/checksums.txt"
+sha256sum --ignore-missing -c checksums.txt   # on macOS: shasum -a 256 --ignore-missing -c checksums.txt
+tar -xzf "tailwise_${VERSION}_${OS}_${ARCH}.tar.gz" tailwise
+
+export JEV_API_KEY=...
+./tailwise -version
+./tailwise            # the built-in defaults: Jev, embedded NATS, Phoenix at localhost:6006
+```
+
+Windows archives are `.zip` files holding `tailwise.exe`. On macOS, a binary
+downloaded in a browser is quarantined; clear it with
+`xattr -d com.apple.quarantine tailwise`. To see kept traces, start
+Phoenix too (`make phoenix`, or `phoenix serve`); it takes port 4317, so run
+the engine with `TAILWISE_OTLP_GRPC_ADDR=:14317`.
 
 ### With Docker Compose
 

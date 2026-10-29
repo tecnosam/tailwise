@@ -1,0 +1,31 @@
+# Keeps GitHub issues in step with issues/*.md: on every push to main (merges
+# included) that touches the folder, scripts/sync-issues.sh creates, edits or
+# closes the matching issues. Edit the files, not the issues: the next sync
+# overwrites an issue's title and body.
+name: Sync issues
+
+on:
+  push:
+    branches: [main]
+    paths: ['issues/**', 'scripts/sync-issues.sh']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# One sync at a time, so two pushes never create the same issue twice.
+concurrency:
+  group: sync-issues
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync issues/*.md to GitHub issues
+        run: scripts/sync-issues.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}

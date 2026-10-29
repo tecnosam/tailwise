@@ -90,6 +90,26 @@ make test
 - User-facing behaviour changes are reflected in the README, and changes to
   configuration in `tailwise.schema.yaml` and the examples.
 
+## Issues
+
+Planned work is written as Markdown in [issues/](issues/), one file per issue,
+and reviewed like code. On every push to main that changes the folder,
+[.github/workflows/issues.yml](.github/workflows/issues.yml) runs
+[scripts/sync-issues.sh](scripts/sync-issues.sh), which keeps the GitHub
+issues in step:
+
+- A new file creates an issue, and an edited file updates its issue's title
+  and body. Edit the file, not the issue: the next sync overwrites the issue.
+- Deleting a file closes its issue with a comment.
+- The first `# ` line is the title, an optional `**Labels:** a, b` line sets
+  labels (created if missing; labels are only ever added), and the rest is
+  the body.
+- A hidden marker at the end of the body names the file, so renaming a file
+  creates a new issue and closes the old one.
+
+`DRY_RUN=1 scripts/sync-issues.sh` prints what a sync would do (it needs `gh`
+signed in to the repository).
+
 ## Commits, versioning and releases
 
 Tailwise follows [Semantic Versioning](https://semver.org), starting at

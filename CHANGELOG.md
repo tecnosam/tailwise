@@ -23,6 +23,17 @@ The first release of the Tailwise inference engine.
   Langfuse, an OpenTelemetry Collector), each from its own durable queue.
 - Runs with no config file: the built-in defaults need only `JEV_API_KEY`.
   Manifests set the questions a model is asked and are optional.
+- Five built-in checks asked alongside `answer_wrong` in the same call:
+  `unsupported_answer`, `missing_tool_calls`, `answered_on_failure`,
+  `ignored_instructions` and `contradicts_knowledge`. A trace is kept when any
+  of them reaches its threshold.
+- A manifest `decision` block: `any_of` lists the questions that can keep a
+  trace, in priority order after the decision question, and `thresholds`
+  gives any of them its own threshold.
+- Flags and severity on every decision: the questions that reached their
+  threshold, and a priority-weighted score that ranks kept traces for review.
+  Both appear in the decision log, with every answer, and on exported traces
+  as `eval.flags`, `eval.severity` and `eval.answers.<question>`.
 - One model per agent, with its own questions, endpoint or key.
 - The engine's own metrics and errors over OpenTelemetry.
 - Docker Compose for a local stack, a Helm chart for Kubernetes, and
