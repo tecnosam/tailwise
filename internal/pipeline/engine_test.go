@@ -128,6 +128,60 @@ func TestEngineScoresWithTheAgentsModel(t *testing.T) {
 	}
 }
 
+// A model sees the trace's system prompt only when it asks for it.
+func TestEngineShowsTheSystemPromptOnlyWhenTheModelAsks(t *testing.T) {
+	var states []trace.State
+	seen := scorerFunc(func() (Score, error) { return Score{P: 0.2}, nil })
+	capture := stateScorer{inner: seen, states: &states}
+	tr := trace.Trace{SystemPrompt: "Only refund delivered orders.", Question: "q", FinalAnswer: "a"}
+	for _, show := range []bool{false, true} {
+		e := NewEngine(Deps{Models: SingleModel(Model{Name: "m", Scorer: capture, SystemPrompt: show}),
+			Policy: keepAtHalf(), Exporter: nowhere{}, Logger: quiet})
+		e.Process(context.Background(), tr)
+	}
+	if len(states) != 2 {
+		t.Fatalf("%d calls, want 2", len(states))
+	}
+	if strings.Contains(string(states[0]), "SYSTEM PROMPT") {
+		t.Errorf("off: the model saw the system prompt:\n%s", states[0])
+	}
+	if !strings.HasPrefix(string(states[1]), "SYSTEM PROMPT:\nOnly refund delivered orders.") {
+		t.Errorf("on: state = %q", states[1])
+	}
+}
+
+// A model set to the grounded evidence strategy sees tool results on their
+// lines; the default shows only the status.
+func TestEngineEvidenceStrategy(t *testing.T) {
+	var states []trace.State
+	capture := stateScorer{inner: scorerFunc(func() (Score, error) { return Score{P: 0.2}, nil }), states: &states}
+	tr := trace.Trace{Question: "q", FinalAnswer: "a",
+		ToolCalls: []trace.ToolCall{{Name: "get_order", Output: `{"status":"pending"}`}}}
+	for _, evidence := range []string{"", trace.EvidenceGrounded} {
+		e := NewEngine(Deps{Models: SingleModel(Model{Name: "m", Scorer: capture, Evidence: evidence, EvidenceBudget: 1000}),
+			Policy: keepAtHalf(), Exporter: nowhere{}, Logger: quiet})
+		e.Process(context.Background(), tr)
+	}
+	if strings.Contains(string(states[0]), "pending") {
+		t.Errorf("default: the result was shown:\n%s", states[0])
+	}
+	if !strings.Contains(string(states[1]), `1. get_order() -> ok: {"status":"pending"}`) {
+		t.Errorf("grounded: state = %q", states[1])
+	}
+}
+
+type stateScorer struct {
+	inner  Scorer
+	states *[]trace.State
+}
+
+func (s stateScorer) Score(ctx context.Context, st trace.State) (Score, error) {
+	*s.states = append(*s.states, st)
+	return s.inner.Score(ctx, st)
+}
+
+func (s stateScorer) Ready(ctx context.Context) error { return s.inner.Ready(ctx) }
+
 // A fallback is labelled with the model that failed, and the failure is
 // recorded with its error.
 func TestEngineFallbackNamesTheAgentsModel(t *testing.T) {
@@ -273,3 +327,23 @@ type scorerFunc func() (Score, error)
 
 func (f scorerFunc) Score(context.Context, trace.State) (Score, error) { return f() }
 func (scorerFunc) Ready(context.Context) error                         { return nil }
+
+// A trace too long for the model is cut to fit, and the decision says so.
+func TestProcessTrimsLongTraces(t *testing.T) {
+	for _, evidence := range []string{trace.EvidenceFirst, trace.EvidenceGrounded} {
+		var states []trace.State
+		capture := stateScorer{inner: scorerFunc(func() (Score, error) { return Score{P: 0.9}, nil }), states: &states}
+		e := NewEngine(Deps{Models: SingleModel(Model{Name: "m", Scorer: capture, Evidence: evidence, EvidenceBudget: 12000}),
+			Policy: keepAtHalf(), Exporter: nowhere{}, Logger: quiet})
+		long := sampleTrace("")
+		long.FinalAnswer = strings.Repeat("+ patch line\n", 20000)
+		out := e.Process(context.Background(), long)
+		if !out.Record.Trimmed || !out.Record.Decision.Scored || len(states[0]) > trace.MaxStateChars {
+			t.Errorf("%s: trimmed = %v, scored = %v, state %d characters", evidence, out.Record.Trimmed,
+				out.Record.Decision.Scored, len(states[0]))
+		}
+		if out := e.Process(context.Background(), sampleTrace("")); out.Record.Trimmed {
+			t.Errorf("%s: a short trace was trimmed", evidence)
+		}
+	}
+}

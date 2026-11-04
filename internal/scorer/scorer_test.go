@@ -401,8 +401,24 @@ func TestScoreKeepsTheAnswersAndTakesTheHighest(t *testing.T) {
 		t.Errorf("with any_of: %+v, %v; want p_keep 0.8 from two deciding answers", res, err)
 	}
 
+	if res.InputTokens != 0 {
+		t.Errorf("input tokens = %d with no usage reported, want 0", res.InputTokens)
+	}
+
 	missing := newClient(t, srv.URL, func(cfg *Config) { cfg.AnyOf = []string{"missing_tool_calls"} })
 	if _, err = missing.Score(context.Background(), "s"); err == nil || !strings.Contains(err.Error(), `no answer for "missing_tool_calls"`) {
 		t.Errorf("a deciding question without an answer: error = %v", err)
+	}
+}
+
+func TestScoreReadsTheInputTokens(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"answers": {"answer_wrong": {"type": "noul", "noul": 0.2}}, "usage": {"input_tokens": 410, "output_tokens": 3}}`))
+	}))
+	defer srv.Close()
+
+	res, err := newClient(t, srv.URL, nil).Score(context.Background(), "s")
+	if err != nil || res.InputTokens != 410 {
+		t.Fatalf("input tokens = %d, %v; want 410", res.InputTokens, err)
 	}
 }

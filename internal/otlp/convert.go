@@ -30,17 +30,25 @@ const (
 
 	kindAgent     = "AGENT"
 	kindChain     = "CHAIN"
+	kindLLM       = "LLM"
 	kindTool      = "TOOL"
 	kindRetriever = "RETRIEVER"
 
 	retrievalDocFmt = "retrieval.documents.%d.document.content"
+
+	// An LLM span's prompt, one message per index; a message's text is in
+	// content, or split over contents parts.
+	inputMessageRoleFmt    = "llm.input_messages.%d.message.role"
+	inputMessageContentFmt = "llm.input_messages.%d.message.content"
+	inputMessagePartFmt    = "llm.input_messages.%d.message.contents.%d.message_content.text"
 )
 
 // Attributes an agent can set to say exactly what the model should see,
 // instead of having it inferred from tool output.
 const (
-	AttrEvidenceFmt = "tailwise.evidence.%d"
-	AttrToolStatus  = "tailwise.tool.status"
+	AttrEvidenceFmt  = "tailwise.evidence.%d"
+	AttrToolStatus   = "tailwise.tool.status"
+	AttrSystemPrompt = "tailwise.system_prompt"
 )
 
 // ErrNotScorable means there is no root span with a question and an answer.
@@ -131,12 +139,13 @@ func (a Assembler) Assemble(traceID string, payloads [][]byte) (trace.Trace, err
 
 	tools := spansOfKind(spans, kindTool)
 	t := trace.Trace{
-		TraceID:     traceID,
-		Agent:       a.agentOf(root, resourceOf(merged, root)),
-		Question:    question,
-		FinalAnswer: answer,
-		ToolCalls:   toolCalls(tools),
-		Evidence:    evidence(root, spans, tools),
+		TraceID:      traceID,
+		Agent:        a.agentOf(root, resourceOf(merged, root)),
+		SystemPrompt: systemPrompt(root, spans),
+		Question:     question,
+		FinalAnswer:  answer,
+		ToolCalls:    toolCalls(tools),
+		Evidence:     evidence(root, spans, tools),
 	}
 	if t.OTLP, err = proto.Marshal(merged); err != nil {
 		return trace.Trace{}, fmt.Errorf("otlp: encode trace %s: %w", traceID, err)
@@ -255,7 +264,7 @@ func toolCalls(tools []*tracepb.Span) []trace.ToolCall {
 		if name == "" {
 			name = s.GetName()
 		}
-		call := trace.ToolCall{Name: name, Args: toolArgs(s)}
+		call := trace.ToolCall{Name: name, Args: toolArgs(s), Output: messageText(attr(s, attrOutputValue), outputKeys)}
 		call.Status, _ = json.Marshal(toolStatus(s))
 		calls = append(calls, call)
 	}
@@ -285,7 +294,55 @@ func toolStatus(s *tracepb.Span) string {
 	if s.GetStatus().GetCode() == tracepb.Status_STATUS_CODE_ERROR {
 		return "error"
 	}
+	// Many tools report a failure as their output and leave the span OK.
+	if reportsFailure(messageText(attr(s, attrOutputValue), outputKeys)) {
+		return "error"
+	}
 	return "ok"
+}
+
+// reportsFailure is an output that starts "Error:", in any case.
+func reportsFailure(output string) bool {
+	head := strings.TrimSpace(output)
+	return len(head) >= len("error:") && strings.EqualFold(head[:len("error:")], "error:")
+}
+
+// systemPrompt is tailwise.system_prompt on the root if the agent set it, else
+// the system message of the first LLM call that has one: the agent's own
+// instructions, as its instrumentor recorded them.
+func systemPrompt(root *tracepb.Span, spans []*tracepb.Span) string {
+	if explicit, ok := lookup(root, AttrSystemPrompt); ok {
+		return explicit
+	}
+	for _, s := range spansOfKind(spans, kindLLM) {
+		for i := 0; ; i++ {
+			role, ok := lookup(s, fmt.Sprintf(inputMessageRoleFmt, i))
+			if !ok {
+				break
+			}
+			if role == "system" {
+				if text := messageContent(s, i); strings.TrimSpace(text) != "" {
+					return text
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func messageContent(s *tracepb.Span, i int) string {
+	if content, ok := lookup(s, fmt.Sprintf(inputMessageContentFmt, i)); ok {
+		return content
+	}
+	var parts []string
+	for j := 0; ; j++ {
+		text, ok := lookup(s, fmt.Sprintf(inputMessagePartFmt, i, j))
+		if !ok {
+			break
+		}
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, "\n")
 }
 
 // evidence comes from the most explicit source available: evidence attributes
@@ -487,4 +544,8 @@ func StringAttr(key, value string) *commonpb.KeyValue {
 
 func FloatAttr(key string, value float64) *commonpb.KeyValue {
 	return &commonpb.KeyValue{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_DoubleValue{DoubleValue: value}}}
+}
+
+func BoolAttr(key string, value bool) *commonpb.KeyValue {
+	return &commonpb.KeyValue{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_BoolValue{BoolValue: value}}}
 }

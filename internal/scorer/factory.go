@@ -14,6 +14,12 @@ type ModelConfig struct {
 	Retry retry.Policy
 	// Checks are the questions that can keep a trace, in priority order.
 	Checks []pipeline.Check
+	// SystemPrompt shows the model the agent's system prompt.
+	SystemPrompt bool
+	// Evidence is how tool results reach the model (trace.EvidenceFirst or
+	// trace.EvidenceGrounded); EvidenceBudget bounds the grounded results.
+	Evidence       string
+	EvidenceBudget int
 }
 
 type Models struct {
@@ -40,5 +46,6 @@ func buildModel(mc ModelConfig) (pipeline.Model, error) {
 	if err != nil {
 		return pipeline.Model{}, err
 	}
-	return pipeline.Model{Name: pipeline.ModelName(mc.Client.Model), Scorer: s, Retry: mc.Retry, Checks: mc.Checks}, nil
+	return pipeline.Model{Name: pipeline.ModelName(mc.Client.Model), Scorer: s, Retry: mc.Retry, Checks: mc.Checks,
+		SystemPrompt: mc.SystemPrompt, Evidence: mc.Evidence, EvidenceBudget: mc.EvidenceBudget}, nil
 }

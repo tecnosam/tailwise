@@ -86,6 +86,9 @@ type response struct {
 	Answers          map[string]json.RawMessage `json:"answers"`
 	LatencyMS        *float64                   `json:"latency_ms"`
 	EvaluationTimeMS *float64                   `json:"evaluation_time_ms"`
+	Usage            struct {
+		InputTokens int `json:"input_tokens"`
+	} `json:"usage"`
 }
 
 type noulAnswer struct {
@@ -171,7 +174,8 @@ func (c *Client) parse(raw []byte, elapsed time.Duration) (pipeline.Score, error
 		deciding[q] = a
 		p = max(p, a)
 	}
-	score := pipeline.Score{P: p, Answers: answers, Deciding: deciding, Model: c.modelName(out), Latency: reportedLatency(out, elapsed)}
+	score := pipeline.Score{P: p, Answers: answers, Deciding: deciding, Model: c.modelName(out), Latency: reportedLatency(out, elapsed),
+		InputTokens: out.Usage.InputTokens}
 	score.Cause, score.Explanation = c.reasonAnswer(out)
 	return score, nil
 }

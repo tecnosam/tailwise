@@ -139,6 +139,66 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "413":
           $ref: "#/components/responses/TooLarge"
+  /v1/otlp/traces:score:
+    post:
+      tags: [traces]
+      operationId: scoreOTLPTrace
+      summary: Score a trace sent as OTLP spans, synchronously
+      description: |
+        Takes one trace as an OTLP/HTTP export request (protobuf or JSON,
+        optionally gzipped), builds the trace from its spans exactly as the
+        OTLP receivers do, scores it and returns the decision. There is no
+        queue and no wait for late spans, so send every span of the trace in
+        one request. Meant for testing and benchmarks.
+
+        Fallback behaves as for `POST /v1/traces:score`.
+      requestBody:
+        required: true
+        content:
+          application/x-protobuf:
+            schema:
+              type: string
+              format: binary
+              description: An `ExportTraceServiceRequest` holding the spans of one trace.
+          application/json:
+            schema:
+              type: object
+              description: An `ExportTraceServiceRequest` in OTLP/JSON, IDs as hex.
+      responses:
+        "200":
+          description: The decision for the trace.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Decision"
+        "400":
+          description: The body is not an OTLP export request, or holds spans of no trace or of more than one.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: the request must hold the spans of exactly one trace
+        "413":
+          description: The request body is larger than 16 MiB.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "415":
+          description: Content-Type is not application/x-protobuf or application/json.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: No root span has a question (`input.value`) and an answer (`output.value`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: 'trace is not scorable: root span "agent_run" has no output.value'
   /healthz:
     get:
       tags: [health]
@@ -259,6 +319,12 @@ components:
             the trace (agents.models in the config); an agent with no model
             of its own, or no agent, gets the default model.
           example: support-bot
+        system_prompt:
+          type: string
+          description: >-
+            The instructions the agent ran under (its system prompt), so the
+            model can judge the run against them. Optional; shown to the model
+            cut to 8000 characters.
         question:
           type: string
           minLength: 1
@@ -294,6 +360,11 @@ components:
           description: Outcome of the call.
           default: ok
           example: ok
+        output:
+          type: string
+          description: >-
+            What the call returned, as text. Optional. Shown to models set to
+            scorer.evidence grounded, on the call's line; ignored otherwise.
     Accepted:
       type: object
       required: [trace_id]
@@ -357,6 +428,34 @@ components:
         exported:
           type: boolean
           description: The trace was kept and queued for export to at least one back end, which receives it moments later. A failed send is retried and dead-lettered after max_deliver tries.
+        answers:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+          description: Every yes/no answer the model gave, by question. Omitted on fallback.
+          example:
+            answer_wrong: 0.93
+            unsupported_answer: 0.71
+        flags:
+          type: array
+          items:
+            type: string
+          description: The deciding questions whose answer reached their threshold, in priority order. Omitted when there are none.
+          example: [answer_wrong, unsupported_answer]
+        severity:
+          type: number
+          format: double
+          description: The flags' priority-weighted answers summed; ranks kept traces for review. Omitted when 0.
+        input_tokens:
+          type: integer
+          description: The input tokens the model reported billing for the call. Omitted if it reported none, and on fallback.
+          example: 410
+        trimmed:
+          type: boolean
+          description: >-
+            True when the trace was too long for the model, so the middle of
+            its longest fields was cut before scoring. Omitted otherwise.
     Status:
       type: object
       required: [status]

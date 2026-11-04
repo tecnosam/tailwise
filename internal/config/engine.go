@@ -146,8 +146,11 @@ func model(s Scorer, apiKey string, m *Manifest) scorer.ModelConfig {
 			APIKey:           apiKey,
 			Timeout:          s.Timeout,
 		},
-		Retry:  retry.Policy{Attempts: s.MaxRetries + 1, Backoff: s.Backoff, Jitter: true},
-		Checks: m.checks(s.DecisionQuestion),
+		Retry:          retry.Policy{Attempts: s.MaxRetries + 1, Backoff: s.Backoff, Jitter: true},
+		Checks:         m.checks(s.DecisionQuestion),
+		SystemPrompt:   s.SystemPrompt,
+		Evidence:       s.Evidence,
+		EvidenceBudget: s.EvidenceBudget,
 	}
 }
 

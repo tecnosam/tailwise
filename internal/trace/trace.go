@@ -18,11 +18,14 @@ type AgentName string
 const MaxAgentLength = 128
 
 type Trace struct {
-	TraceID   string     `json:"trace_id,omitempty"`
-	Agent     AgentName  `json:"agent,omitempty"`
-	Question  string     `json:"question"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-	Evidence  []string   `json:"evidence,omitempty"`
+	TraceID string    `json:"trace_id,omitempty"`
+	Agent   AgentName `json:"agent,omitempty"`
+	// SystemPrompt is the instructions the agent ran under, so the model can
+	// judge the run against them; empty when unknown.
+	SystemPrompt string     `json:"system_prompt,omitempty"`
+	Question     string     `json:"question"`
+	ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
+	Evidence     []string   `json:"evidence,omitempty"`
 	// FinalAnswer must be present but may be empty: a run that ended without an
 	// answer is still scored.
 	FinalAnswer string `json:"final_answer"`
@@ -38,6 +41,9 @@ type ToolCall struct {
 	Name   string          `json:"name"`
 	Args   json.RawMessage `json:"args,omitempty"`
 	Status json.RawMessage `json:"status,omitempty"`
+	// Output is what the call returned, as text. BuildState does not show it
+	// (it shows evidence); BuildStateGrounded shows it on the call's line.
+	Output string `json:"output,omitempty"`
 }
 
 // StatusText is the string itself, "ok" when absent, or compact JSON.

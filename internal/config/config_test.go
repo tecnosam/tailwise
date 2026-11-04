@@ -278,9 +278,17 @@ func TestLoadWithoutAFile(t *testing.T) {
 	if m.Client.ReasonQuestion != "why_wrong" || m.Client.Reasons["contradicts_evidence"] != "The final answer contradicts the evidence the agent gathered." {
 		t.Errorf("reason question %q, reasons %v", m.Client.ReasonQuestion, m.Client.Reasons)
 	}
-	// Any of the five checks can keep a trace, as well as answer_wrong.
-	if a := m.Client.AnyOf; len(a) != 5 || a[0] != "unsupported_answer" || a[4] != "contradicts_knowledge" {
-		t.Errorf("any_of = %q, want the five built-in checks", a)
+	// answer_wrong alone decides; the five checks are asked and recorded only.
+	if a := m.Client.AnyOf; a != nil {
+		t.Errorf("any_of = %q, want none: answer_wrong decides alone", a)
+	}
+	if len(m.Checks) != 1 || m.Checks[0].Question != "answer_wrong" {
+		t.Errorf("checks = %+v, want answer_wrong alone", m.Checks)
+	}
+	for _, q := range []string{"unsupported_answer", "missing_tool_calls", "answered_on_failure", "ignored_instructions", "contradicts_knowledge"} {
+		if !strings.Contains(string(m.Client.Questions), `"`+q+`"`) {
+			t.Errorf("built-in questions no longer ask %s", q)
+		}
 	}
 	t.Setenv(DefaultJevAPIKeyEnv, "")
 	if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "$JEV_API_KEY is not set") {
@@ -452,5 +460,46 @@ func TestManifestDecisionChecks(t *testing.T) {
 	}
 	if c := cfg.Models.Default.Checks; len(c) != 1 || c[0] != (pipeline.Check{Question: "answer_wrong", Weight: 1}) {
 		t.Errorf("checks = %+v, want answer_wrong alone with weight 1", c)
+	}
+}
+
+// The system prompt is shown only to a model that asks for it.
+func TestSystemPromptIsOptIn(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Models.Default.SystemPrompt {
+		t.Error("system_prompt is on by default")
+	}
+	cfg, err = Load(write(t, "scorer:\n  system_prompt: true\nagents:\n  models:\n    a:\n      endpoint: http://kev:8010/v1/systemone\n      model: kev-a\n", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Models.Default.SystemPrompt || cfg.Models.ByAgent["a"].SystemPrompt {
+		t.Errorf("scorer: %v, agent a: %v; want on for the scorer only (agent models take nothing from it)",
+			cfg.Models.Default.SystemPrompt, cfg.Models.ByAgent["a"].SystemPrompt)
+	}
+}
+
+func TestEvidenceStrategy(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := cfg.Models.Default; m.Evidence != "grounded" || m.EvidenceBudget != 12000 {
+		t.Errorf("defaults: evidence %q, budget %d; want grounded, 12000", m.Evidence, m.EvidenceBudget)
+	}
+	cfg, err = Load(write(t, "scorer:\n  evidence: first\n  evidence_budget: 4000\n", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := cfg.Models.Default; m.Evidence != "first" || m.EvidenceBudget != 4000 {
+		t.Errorf("evidence %q, budget %d", m.Evidence, m.EvidenceBudget)
+	}
+	for _, bad := range []string{"scorer:\n  evidence: everything\n", "scorer:\n  evidence_budget: 0\n"} {
+		if _, err := Load(write(t, bad, "")); err == nil || !strings.Contains(err.Error(), "evidence") {
+			t.Errorf("%q: error = %v", bad, err)
+		}
 	}
 }

@@ -485,7 +485,7 @@ func TestScoreEndToEndKeep(t *testing.T) {
 			t.Errorf("response is missing %q: %s", f, w.Body)
 		}
 	}
-	for _, f := range []string{"p_keep_raw", "severity"} {
+	for _, f := range []string{"p_keep_raw"} {
 		if _, ok := fields[f]; ok {
 			t.Errorf("response has the removed field %q: %s", f, w.Body)
 		}

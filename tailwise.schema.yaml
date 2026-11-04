@@ -318,6 +318,38 @@ properties:
           why_wrong. A manifest without it gives reasons that only say how
           likely the answer is wrong, with a warning at start-up. Empty turns
           reasons off.
+      system_prompt:
+        type: boolean
+        description: >-
+          Show the model the agent's system prompt, above the question. The
+          prompt comes from the trace's system_prompt (JSON API), the root
+          span's tailwise.system_prompt, or the first LLM span's system
+          message, and is cut to 8000 characters. Off by default: in the
+          benchmark it kept more traces without ranking failures better,
+          and it adds the prompt's tokens to every call.
+      evidence:
+        type: string
+        enum: [first, grounded]
+        default: grounded
+        description: >-
+          How tool results reach the model. grounded: each tool call's result
+          on its line, within evidence_budget characters, choosing first the
+          results whose values later calls use as arguments, then the most
+          recent; a long result keeps the parts later calls used. first: the
+          first three evidence items (explicit tailwise.evidence.*, else
+          RETRIEVER documents, else paragraphs of successful tool outputs),
+          each cut to 1500 characters; tool-call lines show only the status.
+          In the benchmark, first hid most tool results and the model flagged
+          what it could not check, so it ranked failures worse at about half
+          the cost.
+      evidence_budget:
+        type: integer
+        minimum: 1
+        default: 12000
+        description: >-
+          With evidence grounded, the most characters of tool results shown,
+          across all calls (about 4 characters per token). Ignored with
+          first.
       timeout:
         $ref: '#/$defs/duration'
         default: 30s

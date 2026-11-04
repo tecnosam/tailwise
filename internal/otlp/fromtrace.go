@@ -9,9 +9,9 @@ import (
 	"github.com/tecnosam/tailwise/internal/trace"
 )
 
-// SpansFromTrace sets the override attributes (evidence on the root, status on
-// each tool), so sending these spans to the receiver reproduces the record
-// exactly.
+// SpansFromTrace sets the override attributes (evidence and the system prompt
+// on the root, status on each tool), so sending these spans to the receiver
+// reproduces the record exactly.
 func SpansFromTrace(traceID []byte, t trace.Trace) []*tracepb.Span {
 	const rootID = 1
 	id := func(n int) []byte { return []byte{0, 0, 0, 0, 0, 0, byte(n >> 8), byte(n)} }
@@ -30,6 +30,9 @@ func SpansFromTrace(traceID []byte, t trace.Trace) []*tracepb.Span {
 	}
 	for i, e := range t.Evidence {
 		root.Attributes = append(root.Attributes, StringAttr(fmt.Sprintf(AttrEvidenceFmt, i), e))
+	}
+	if t.SystemPrompt != "" {
+		root.Attributes = append(root.Attributes, StringAttr(AttrSystemPrompt, t.SystemPrompt))
 	}
 
 	spans := []*tracepb.Span{root}
@@ -50,6 +53,9 @@ func SpansFromTrace(traceID []byte, t trace.Trace) []*tracepb.Span {
 		}
 		if len(c.Args) > 0 {
 			s.Attributes = append(s.Attributes, StringAttr(attrInputValue, string(c.Args)))
+		}
+		if c.Output != "" {
+			s.Attributes = append(s.Attributes, StringAttr(attrOutputValue, c.Output))
 		}
 		spans = append(spans, s)
 	}

@@ -229,6 +229,9 @@ together. [architecture.md](architecture/architecture.md) explains how a file is
 | `scorer.manifest` | none | Optional manifest: the questions the model is asked. See [Manifests](#manifests) |
 | `scorer.decision_question` | `answer_wrong` | Question that drives the decision; must be `noul` |
 | `scorer.reason_question` | `why_wrong` | Choice question whose chosen option is the plain-English `reason`; see [Reasons](#reasons). Empty turns it off |
+| `scorer.system_prompt` | `false` | Show the model the agent's system prompt, above the question (see [How spans are read](#how-spans-are-read)). Off by default: in the [benchmark](bench/README.md) it kept more traces without ranking failures better, and it adds the prompt's tokens to every call. Each `agents.models` entry sets its own |
+| `scorer.evidence` | `grounded` | How tool results reach the model. `grounded`: each call's result on its line, within `scorer.evidence_budget`, choosing first the results whose values later calls use as arguments, then the most recent; a long result keeps the parts later calls used. `first`: the first three evidence items, each cut to 1,500 characters; tool-call lines show only the status. In the [benchmark](bench/README.md), `first` hid most tool results and the model flagged what it could not check, so it ranked failures worse at about half the cost |
+| `scorer.evidence_budget` | `12000` | With `evidence: grounded`, the most characters of tool results shown across all calls |
 | `scorer.timeout` | `30s` | Timeout per call |
 | `scorer.max_retries` | `3` | Retries after the first attempt, on the synchronous endpoint only; a queued trace is redelivered by the queue instead |
 | `scorer.backoff` | `[1s, 5s, 15s]` | Base delay before each synchronous retry; the last value repeats |
@@ -312,8 +315,13 @@ engine logs a warning at start-up. They are:
 | `contradicts_knowledge` | Does it contradict general knowledge? |
 | `why_wrong` | Which [reason](#reasons) explains what is wrong? |
 
-Each yes/no answer is the probability that the agent failed in that way, and
-any of them can keep the trace. To word the questions
+Each yes/no answer is the probability that the agent failed in that way.
+`answer_wrong` alone decides keep or drop; the other answers are recorded
+with every decision (in the log and as `eval.answers.<question>` on the
+export) so a reviewer sees which problems the model found. In the
+[benchmark](bench/README.md), letting any check keep a trace kept most traces
+without ranking failures any better, so the built-in questions have no
+`decision` block; a manifest can add one. To word the questions
 for your agent, start from
 [`examples/manifests/my-agent.json`](examples/manifests/my-agent.json) and
 set `scorer.manifest` (or `TAILWISE_MANIFEST`).
@@ -348,7 +356,7 @@ them its own threshold:
 - **Priority and severity.** The decision question always ranks first, then
   `any_of` in the order written. Ranks become weights that sum to 1, falling
   steeply from the top ([rank-order centroid](https://doi.org/10.1287/mnsc.42.11.1515)
-  weights: with all six built-in questions, 0.41, 0.24, 0.16, 0.10, 0.06 and
+  weights: with six deciding questions, 0.41, 0.24, 0.16, 0.10, 0.06 and
   0.03). A trace's **severity** is the sum of weight × answer over its flags:
   higher for more problems, and for higher-priority ones. It does not change
   whether a trace is kept; it ranks kept traces for review (`severity` in the
@@ -513,12 +521,13 @@ attributes that Phoenix's instrumentors emit.
 | --- | --- |
 | Root span | The span whose parent is not in the trace, preferring `openinference.span.kind` = `AGENT`, then `CHAIN` |
 | `agent` | The first of `agents.attributes` set on the root span, else on its resource |
+| `system_prompt` | `tailwise.system_prompt` on the root span if set; else the system message of the first `LLM` span that has one (`llm.input_messages.<i>.message.role` = `system`, its `content` or its `contents` parts joined) |
 | `question` | Root span `input.value` |
 | `final_answer` | Root span `output.value` |
 | `tool_calls` | Spans with kind `TOOL`, ordered by start time |
 | tool `name` | `tool.name`, else the span name |
 | tool `args` | `input.value` if it is JSON, else `tool.parameters`, else `input.value` as a string |
-| tool `status` | `tailwise.tool.status` if set; otherwise `error` when the span status is ERROR, else `ok` |
+| tool `status` | `tailwise.tool.status` if set; otherwise `error` when the span status is ERROR or the output starts with `Error:` (any case), else `ok` |
 | `evidence` | First of: `tailwise.evidence.<i>` on the root span; documents on `RETRIEVER` spans; the paragraphs (split on blank lines) of successful tool outputs |
 
 When `input.value` or `output.value` holds a JSON object, the text is taken
@@ -555,6 +564,7 @@ An agent can remove the difference by setting two attributes itself:
 | --- | --- | --- |
 | `tailwise.evidence.0`, `tailwise.evidence.1`, ... | the root span | the evidence items, in order |
 | `tailwise.tool.status` | each `TOOL` span | the tool call's status |
+| `tailwise.system_prompt` | the root span | the agent's system prompt, when its LLM spans do not record it or record a sub-agent's first |
 
 With both set, a trace sent as spans yields byte for byte the slice the same
 trace yields through the JSON API. A test checks this for every fixture, and
@@ -572,6 +582,7 @@ unless the embedded server runs without `queue.store_dir`.
 {
   "trace_id": "7f3a91c2e8",
   "agent": "support-bot",
+  "system_prompt": "You answer geography questions. Cite your sources.",
   "question": "Which river flows through the capital of France?",
   "tool_calls": [{"name": "search", "args": {"query": "capital of France"}, "status": "ok"}],
   "evidence": ["Paris is the capital of France.", "The Seine flows through Paris."],
@@ -583,7 +594,13 @@ unless the embedded server runs without `queue.store_dir`.
   string for a run that ended without an answer.
 - `trace_id` is optional; the engine generates 32 hex characters if it is missing.
 - `agent` is optional and picks the model (see [One model per agent](#one-model-per-agent)); at most 128 bytes.
-- `args` may be any JSON value. `status` defaults to `ok`.
+- `system_prompt` is optional: the instructions the agent ran under. A model
+  with `scorer.system_prompt: true` sees it, cut to 8,000 characters, above
+  the question; otherwise it is ignored and the model sees exactly what it
+  would without one.
+- `args` may be any JSON value. `status` defaults to `ok`. A tool call's
+  optional `output` is what it returned; models with
+  `scorer.evidence: grounded`, the default, see it.
 - This is the engine's own JSON API on port 8080. The OTLP receiver also
   serves a `/v1/traces` path, on port 4318, with a different body.
 
@@ -612,19 +629,39 @@ slow back end never holds up the response.
   "cause": "contradicts_evidence",
   "model": "jev-1.14.0",
   "latency_ms": 357.8,
-  "exported": true
+  "exported": true,
+  "answers": {"answer_wrong": 0.98, "unsupported_answer": 0.12},
+  "flags": ["answer_wrong"],
+  "severity": 0.40,
+  "input_tokens": 412
 }
 ```
 
 | Field | Values |
 | --- | --- |
 | `decision` | `keep` or `drop` |
-| `p_keep` | The model's probability that the final answer is wrong (its `noul` for the decision question); `null` on fallback |
+| `p_keep` | The highest answer among the questions that decide (the decision question alone without a `decision` block); `null` on fallback |
 | `rule` | Which part of the policy decided: `above_threshold`, `random_floor`, `below_threshold` or `fallback` |
 | `reason` | Why the model thinks the final answer is wrong, or that it is right, in plain English (see [Reasons](#reasons)) |
 | `cause` | The model's short name for that reason, e.g. `contradicts_evidence` or `correct`; omitted when it gave none |
 | `latency_ms` | The model's reported latency; the measured time if it reports none, or on fallback |
 | `exported` | The trace was kept and queued to at least one exporter, which sends it right after |
+| `answers` | Every yes/no answer the model gave, by question; omitted on fallback |
+| `flags`, `severity` | The questions that reached their threshold, in priority order, and their weighted score (see [Any question can keep a trace](#any-question-can-keep-a-trace)); omitted when there are none |
+| `input_tokens` | The input tokens the model reported billing for the call; omitted if it reported none |
+| `trimmed` | `true` when the trace was too long for the model (over 40,000 characters as rendered), so the middle of its longest fields, such as a giant patch, was cut before scoring; omitted otherwise |
+
+### `POST /v1/otlp/traces:score`
+
+Scores one trace sent as OTLP spans, synchronously, and returns the same
+response as `POST /v1/traces:score`. The body is an OTLP/HTTP export request
+(`application/x-protobuf` or `application/json`, optionally gzipped) holding
+the spans of exactly one trace. The trace is built from the spans exactly as
+the OTLP receivers build it (see [From spans to a decision](#from-spans-to-a-decision)),
+but without the queue or the wait for late spans, so send every span in one
+request. It answers 400 for spans of more than one trace, and 422 when no
+root span has a question and an answer. Meant for testing and benchmarks:
+[bench/](bench/README.md) scores datasets through it.
 
 ### API docs: `GET /docs` and `GET /openapi.yaml`
 
@@ -945,6 +982,7 @@ Root span attributes:
 | `eval.flags` | string | both | The deciding questions that reached their threshold, comma-separated in priority order, e.g. `answer_wrong,unsupported_answer`; omitted when none did |
 | `eval.severity` | double | both | Sum of priority weight × answer over the flags; omitted when there are none |
 | `eval.answers.<question>` | double | both | Each yes/no answer, e.g. `eval.answers.missing_tool_calls`; omitted on a fallback keep |
+| `eval.trimmed` | bool | both | `true` when the model saw the trace with the middle of its longest fields cut to fit; omitted otherwise |
 
 Tool span attributes (rebuilt traces only; forwarded tool spans are not
 changed):

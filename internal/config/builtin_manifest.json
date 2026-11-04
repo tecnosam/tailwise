@@ -1,6 +1,6 @@
 {
   "model": "built-in",
-  "note": "The questions the engine asks when a model has no manifest of its own, all in one call. A trace is kept when answer_wrong, or any question in decision.any_of, reaches the keep threshold; any_of is in priority order after answer_wrong. why_wrong picks the plain-English reason.",
+  "note": "The questions the engine asks when a model has no manifest of its own, all in one call. answer_wrong alone decides keep or drop. The five checks are asked and recorded with every decision, so reviewers see which problems the model found, but they do not keep a trace: in the benchmark, letting any of them keep a trace kept most traces without ranking failures better. why_wrong picks the plain-English reason.",
   "questions": {
     "answer_wrong": {
       "type": "noul",
@@ -39,14 +39,5 @@
         "no_answer": "The agent did not give an answer."
       }
     }
-  },
-  "decision": {
-    "any_of": [
-      "unsupported_answer",
-      "missing_tool_calls",
-      "answered_on_failure",
-      "ignored_instructions",
-      "contradicts_knowledge"
-    ]
   }
 }

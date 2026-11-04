@@ -1,0 +1,53 @@
+# Benchmark settings. Everything that changes a score (model, threshold,
+# questions, evidence, and Tailwise's state-building code) is part of the
+# config hash, so changing it re-scores instead of reusing the cache.
+
+seed: 0                  # every random choice: samples, baselines, tie breaks, jitter
+random_seeds: 100        # random-sampling baseline runs, for the mean and 95% interval
+budgets: [0.01, 0.05, 0.10, 0.20, 0.30, 0.50]   # review budgets: share of runs a team reviews
+# Production failure rates to translate precision to: the datasets fail far
+# more often (τ-bench ~40%, SWE-agent ~83%) than most production agents.
+reference_failure_rates: [0.02, 0.05, 0.10, 0.20]
+
+tailwise:
+  # start: the harness runs `binary` with a generated config; false uses a
+  # Tailwise already listening at `url`.
+  start: true
+  binary: ../bin/tailwise        # relative to this file
+  url: http://127.0.0.1:18080
+  envchain: observer-ai          # namespace holding JEV_API_KEY; "" to use the environment
+  model: jev-latest
+  keep_threshold: 0.5            # Tailwise's default
+  manifest: ""                   # "" is the built-in questions and decision rule, as shipped
+  system_prompt: false           # Tailwise's scorer.system_prompt; the runs always carry their prompt
+  evidence: grounded             # Tailwise's scorer.evidence: grounded (default) or first
+  evidence_budget: 12000         # Tailwise's scorer.evidence_budget, for grounded
+
+cost:
+  usd_per_million_input_tokens: 0.042   # Jev; output tokens are free
+  budget_usd: 3.00                      # hard cap: the run stops before going over it
+  tokenizer: cl100k_base                # for --dry-run and pre-call estimates only
+
+client:
+  concurrency: 8
+  requests_per_second: 8
+  max_attempts: 6
+  backoff_seconds: 1.0       # doubles each attempt, with jitter
+  timeout_seconds: 120
+
+datasets:
+  tau:
+    commit: 59a200c6d575d595120f1cb70fea53cef0632f6b   # sierra-research/tau-bench, pinned
+    files: [gpt-4o-retail, gpt-4o-airline, sonnet-35-new-retail, sonnet-35-new-airline]
+  swe:
+    repo: nebius/SWE-agent-trajectories
+    first_shard: 0         # the first parquet file to sample from
+    shards: 1              # parquet files to sample from (about 6,700 runs each)
+    shards_total: 12
+    sample: 1000           # runs, drawn with `seed` at the natural failure rate
+  trail:
+    repo: PatronusAI/TRAIL # gated: accept its terms on Hugging Face first
+    splits: [gaia, swe_bench]
+
+cache_dir: .cache         # relative to this file; git-ignored
+results_dir: results      # relative to this file; git-ignored

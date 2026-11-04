@@ -38,6 +38,9 @@ type Score struct {
 	// Deciding holds the answers of the questions that decide; P is their
 	// highest.
 	Deciding map[string]Probability
+	// InputTokens is what the model reported billing for the call, 0 if it
+	// did not say.
+	InputTokens int
 }
 
 type Decision struct {
@@ -68,6 +71,11 @@ type Record struct {
 	// Flags names the checks whose answer reached their threshold, in
 	// priority order: the problems the model found.
 	Flags []string
+	// InputTokens is the scoring call's billed input, 0 on fallback.
+	InputTokens int
+	// Trimmed means the trace was too long for the model, so the middle of its
+	// longest fields was cut before scoring.
+	Trimmed bool
 }
 
 type Outcome struct {

@@ -19,6 +19,14 @@ type Model struct {
 	// Checks are the questions that can keep a trace, in priority order. With
 	// none, p_keep alone decides.
 	Checks []Check
+	// SystemPrompt shows the model the trace's system prompt. Off, the model
+	// sees the trace as if it had none.
+	SystemPrompt bool
+	// Evidence is how tool results reach the model: trace.EvidenceFirst ("" too)
+	// or trace.EvidenceGrounded, which shows up to EvidenceBudget characters of
+	// results on the tool-call lines.
+	Evidence       string
+	EvidenceBudget int
 	// Agent is set by Route.
 	Agent AgentLabel
 }

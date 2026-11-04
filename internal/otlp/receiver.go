@@ -171,43 +171,49 @@ func (r *Receiver) accept(ctx context.Context, req *coltracepb.ExportTraceServic
 }
 
 func (r *Receiver) handleHTTP(w http.ResponseWriter, req *http.Request) {
-	contentType, _, _ := mime.ParseMediaType(req.Header.Get("Content-Type"))
-	if contentType != contentTypeProto && contentType != contentTypeJSON {
-		// The error has to be written in some encoding; JSON is readable.
-		writeStatus(w, contentTypeJSON, http.StatusUnsupportedMediaType, codes.InvalidArgument,
-			"Content-Type must be application/x-protobuf or application/json")
-		return
-	}
-
-	body, err := readBody(w, req)
+	export, contentType, code, err := ReadExport(w, req)
 	if err != nil {
-		code := http.StatusBadRequest
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			code = http.StatusRequestEntityTooLarge
-		}
 		writeStatus(w, contentType, code, codes.InvalidArgument, err.Error())
 		return
 	}
-
-	var export coltracepb.ExportTraceServiceRequest
-	if contentType == contentTypeJSON {
-		err = unmarshalJSON(body, &export)
-	} else {
-		err = proto.Unmarshal(body, &export)
-	}
-	if err != nil {
-		writeStatus(w, contentType, http.StatusBadRequest, codes.InvalidArgument, "invalid OTLP payload: "+err.Error())
-		return
-	}
-
-	if err := r.accept(req.Context(), &export); err != nil {
+	if err := r.accept(req.Context(), export); err != nil {
 		// 503 is one of the statuses OTLP exporters retry.
 		w.Header().Set("Retry-After", retryAfterSeconds)
 		writeStatus(w, contentType, http.StatusServiceUnavailable, codes.Unavailable, err.Error())
 		return
 	}
 	writeMessage(w, contentType, http.StatusOK, &coltracepb.ExportTraceServiceResponse{})
+}
+
+// ReadExport decodes an OTLP/HTTP request body, protobuf or JSON, gzipped or
+// not. On failure it returns the HTTP status to answer with, and the content
+// type to write the error in.
+func ReadExport(w http.ResponseWriter, req *http.Request) (export *coltracepb.ExportTraceServiceRequest, contentType string, code int, err error) {
+	contentType, _, _ = mime.ParseMediaType(req.Header.Get("Content-Type"))
+	if contentType != contentTypeProto && contentType != contentTypeJSON {
+		// The error has to be written in some encoding; JSON is readable.
+		return nil, contentTypeJSON, http.StatusUnsupportedMediaType,
+			errors.New("Content-Type must be application/x-protobuf or application/json")
+	}
+	body, err := readBody(w, req)
+	if err != nil {
+		code = http.StatusBadRequest
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			code = http.StatusRequestEntityTooLarge
+		}
+		return nil, contentType, code, err
+	}
+	export = &coltracepb.ExportTraceServiceRequest{}
+	if contentType == contentTypeJSON {
+		err = unmarshalJSON(body, export)
+	} else {
+		err = proto.Unmarshal(body, export)
+	}
+	if err != nil {
+		return nil, contentType, http.StatusBadRequest, fmt.Errorf("invalid OTLP payload: %w", err)
+	}
+	return export, contentType, http.StatusOK, nil
 }
 
 func readBody(w http.ResponseWriter, req *http.Request) ([]byte, error) {

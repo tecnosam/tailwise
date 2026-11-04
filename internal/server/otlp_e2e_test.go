@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -344,5 +345,69 @@ func TestJSONAPIIgnoresOTLPField(t *testing.T) {
 	}
 	if got := h.queue.published[0].OTLP; got != nil {
 		t.Errorf("published trace carries client-supplied spans: %v", got)
+	}
+}
+
+// otlpScore posts spans to the synchronous OTLP endpoint as OTLP/protobuf.
+func otlpScore(t *testing.T, h *harness, spans ...*tracepb.Span) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := proto.Marshal(&coltracepb.ExportTraceServiceRequest{ResourceSpans: []*tracepb.ResourceSpans{{
+		ScopeSpans: []*tracepb.ScopeSpans{{Spans: spans}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/v1/otlp/traces:score", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	w := httptest.NewRecorder()
+	h.srv.Handler().ServeHTTP(w, req)
+	return w
+}
+
+func TestScoreOTLPBuildsTheSameSlice(t *testing.T) {
+	kev := newFakeKev(t, func(w http.ResponseWriter, _ string) {
+		w.Write(readFile(t, "kev", "success.json")) // noul 0.93, 410 input tokens
+	})
+	h := newHarness(t, harnessOpts{scorer: kev.client(t)})
+
+	traceID := bytes.Repeat([]byte{0xab}, 16)
+	w := otlpScore(t, h, fixtureSpans(t, "wrong_river.json", traceID)...)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", w.Code, w.Body)
+	}
+	got := decodeBody[Result](t, w)
+	if got.TraceID != hex.EncodeToString(traceID) || got.Decision != "keep" || got.InputTokens != 410 {
+		t.Errorf("result = %+v", got)
+	}
+	if got.Answers["answer_wrong"] != 0.93 {
+		t.Errorf("answers = %v, want answer_wrong 0.93", got.Answers)
+	}
+	wantState := string(readFile(t, "golden", "wrong_river.txt"))
+	if len(kev.states) != 1 || kev.states[0] != wantState {
+		t.Errorf("state sent to Kev:\n%q\nwant:\n%q", kev.states, wantState)
+	}
+}
+
+func TestScoreOTLPRejects(t *testing.T) {
+	kev := newFakeKev(t, func(w http.ResponseWriter, _ string) { w.Write(readFile(t, "kev", "success.json")) })
+	h := newHarness(t, harnessOpts{scorer: kev.client(t)})
+	one, two := bytes.Repeat([]byte{1}, 16), bytes.Repeat([]byte{2}, 16)
+
+	twoTraces := append(fixtureSpans(t, "wrong_river.json", one), fixtureSpans(t, "correct_river.json", two)...)
+	if w := otlpScore(t, h, twoTraces...); w.Code != http.StatusBadRequest {
+		t.Errorf("two traces: status = %d, want 400; body %s", w.Code, w.Body)
+	}
+
+	noAnswer := fixtureSpans(t, "wrong_river.json", one)[1:] // tool spans without their root
+	if w := otlpScore(t, h, noAnswer...); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("no root with an answer: status = %d, want 422; body %s", w.Code, w.Body)
+	}
+
+	w := h.do("POST", "/v1/otlp/traces:score", "{}") // no Content-Type
+	if w.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("no Content-Type: status = %d, want 415", w.Code)
+	}
+	if kev.calls.Load() != 0 {
+		t.Errorf("Kev was called %d times for rejected requests", kev.calls.Load())
 	}
 }

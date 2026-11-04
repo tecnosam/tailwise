@@ -92,3 +92,31 @@ func TestNewID(t *testing.T) {
 		t.Error("two generated IDs are equal")
 	}
 }
+
+func TestDecodeSystemPrompt(t *testing.T) {
+	tr, err := Decode(strings.NewReader(`{"system_prompt": "Be kind.", "question": "q", "final_answer": "a"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(BuildState(tr)); !strings.HasPrefix(got, "SYSTEM PROMPT:\nBe kind.\n\nUSER QUESTION:\nq") {
+		t.Errorf("state = %q", got)
+	}
+}
+
+// Without a system prompt the section is left out: the state is exactly what
+// it was before system prompts existed.
+func TestBuildStateWithoutSystemPrompt(t *testing.T) {
+	got := string(BuildState(Trace{Question: "q", FinalAnswer: "a"}))
+	if !strings.HasPrefix(got, "USER QUESTION:\nq") || strings.Contains(got, "SYSTEM PROMPT") {
+		t.Errorf("state = %q", got)
+	}
+}
+
+func TestBuildStateCutsTheSystemPrompt(t *testing.T) {
+	long := strings.Repeat("é", MaxSystemPromptChars+50)
+	got := string(BuildState(Trace{SystemPrompt: long, Question: "q", FinalAnswer: "a"}))
+	want := "SYSTEM PROMPT:\n" + strings.Repeat("é", MaxSystemPromptChars) + "\n\nUSER QUESTION:"
+	if !strings.HasPrefix(got, want) {
+		t.Errorf("system prompt not cut to %d code points", MaxSystemPromptChars)
+	}
+}

@@ -73,22 +73,38 @@ func (e *Engine) run(ctx context.Context, t trace.Trace, deferSystemErrors bool)
 
 func (e *Engine) decide(ctx context.Context, t trace.Trace, start time.Time, deferSystemErrors bool) (Record, error) {
 	model := e.deps.Models.Route(t.Agent)
-	score, err := e.score(ctx, t, model, deferSystemErrors)
+	state, trimmed := buildState(t, model)
+	score, err := e.score(ctx, t, state, model, deferSystemErrors)
 	e.deps.Metrics.ScoreFinished(ctx, ScoreResult{Agent: model.Agent, Model: model.Name, Duration: time.Since(start), Err: err})
+	var rec Record
 	switch {
 	case err == nil:
-		return e.scored(t, model, score), nil
+		rec = e.scored(t, model, score)
 	case deferSystemErrors && isSystemError(err):
 		return Record{}, err
 	default:
-		return e.fallback(ctx, t, model, err, time.Since(start)), nil
+		rec = e.fallback(ctx, t, model, err, time.Since(start))
 	}
+	rec.Trimmed = trimmed
+	return rec, nil
+}
+
+// buildState renders the trace as the model is set to see it, cut to
+// trace.MaxStateChars.
+func buildState(t trace.Trace, model Model) (trace.State, bool) {
+	if !model.SystemPrompt {
+		t.SystemPrompt = ""
+	}
+	build := trace.BuildState
+	if model.Evidence == trace.EvidenceGrounded {
+		build = func(t trace.Trace) trace.State { return trace.BuildStateGrounded(t, model.EvidenceBudget) }
+	}
+	return trace.Fit(t, trace.MaxStateChars, build)
 }
 
 // On the queued path a system error is returned at once and the queue
 // redelivers; the synchronous path has no queue, so it retries here.
-func (e *Engine) score(ctx context.Context, t trace.Trace, model Model, queued bool) (Score, error) {
-	state := trace.BuildState(t)
+func (e *Engine) score(ctx context.Context, t trace.Trace, state trace.State, model Model, queued bool) (Score, error) {
 	for attempt := 1; ; attempt++ {
 		score, err := model.Scorer.Score(ctx, state)
 		if err == nil || queued || !fault.Retryable(err) || model.Retry.Exhausted(attempt) || ctx.Err() != nil {
@@ -111,7 +127,7 @@ func (e *Engine) scored(t trace.Trace, model Model, score Score) Record {
 		d.Reason = probabilityReason(score.P)
 	}
 	return Record{Trace: t, Agent: model.Agent, Decision: d, Model: score.Model, Latency: score.Latency,
-		Answers: score.Answers, Flags: flags}
+		Answers: score.Answers, Flags: flags, InputTokens: score.InputTokens}
 }
 
 // probabilityReason is the reason for a model that gave none of its own.
@@ -165,6 +181,9 @@ func (e *Engine) logDecision(out Outcome) {
 	}
 	if rec.Flags != nil {
 		attrs = append(attrs, "flags", rec.Flags, "severity", d.Severity)
+	}
+	if rec.Trimmed {
+		attrs = append(attrs, "trimmed", true)
 	}
 	if len(rec.Answers) > 0 {
 		attrs = append(attrs, "answers", rec.Answers)

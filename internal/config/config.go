@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"slices"
 	"time"
+
+	"github.com/tecnosam/tailwise/internal/trace"
 )
 
 const (
@@ -127,6 +129,9 @@ type Scorer struct {
 	Manifest         string          `yaml:"manifest"`
 	DecisionQuestion string          `yaml:"decision_question"`
 	ReasonQuestion   string          `yaml:"reason_question"`
+	SystemPrompt     bool            `yaml:"system_prompt"`
+	Evidence         string          `yaml:"evidence"`
+	EvidenceBudget   int             `yaml:"evidence_budget"`
 	Timeout          time.Duration   `yaml:"timeout"`
 	MaxRetries       int             `yaml:"max_retries"`
 	Backoff          []time.Duration `yaml:"backoff"`
@@ -245,6 +250,8 @@ func Default() File {
 			Model:            JevModel,
 			DecisionQuestion: "answer_wrong",
 			ReasonQuestion:   "why_wrong",
+			Evidence:         trace.EvidenceGrounded,
+			EvidenceBudget:   12000,
 			Timeout:          30 * time.Second,
 			MaxRetries:       3,
 			Backoff: []time.Duration{

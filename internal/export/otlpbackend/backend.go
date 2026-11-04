@@ -114,6 +114,9 @@ func evalAttrs(rec pipeline.Record) []*commonpb.KeyValue {
 		attrs = append(attrs, otlp.StringAttr("eval.flags", strings.Join(rec.Flags, ",")),
 			otlp.FloatAttr("eval.severity", d.Severity))
 	}
+	if rec.Trimmed {
+		attrs = append(attrs, otlp.BoolAttr("eval.trimmed", true))
+	}
 	for _, q := range slices.Sorted(maps.Keys(rec.Answers)) {
 		attrs = append(attrs, otlp.FloatAttr("eval.answers."+q, float64(rec.Answers[q])))
 	}

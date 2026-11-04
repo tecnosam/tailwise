@@ -1,0 +1,16 @@
+# A held-out check: SWE-agent runs from a parquet file no benchmark run or
+# investigation has read (config.yaml samples file 0). Use it to confirm a
+# change designed on the main datasets before treating its numbers as final:
+#
+#   uv run bench run --config heldout.yaml --datasets swe --evidence first
+#   uv run bench run --config heldout.yaml --datasets swe --evidence grounded
+#
+# Everything not set here takes the defaults config.yaml also uses.
+
+seed: 0
+
+datasets:
+  swe:
+    first_shard: 1
+    shards: 1
+    sample: 1000
