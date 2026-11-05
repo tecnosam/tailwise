@@ -326,6 +326,13 @@ for your agent, start from
 [`examples/manifests/my-agent.json`](examples/manifests/my-agent.json) and
 set `scorer.manifest` (or `TAILWISE_MANIFEST`).
 
+How well each check tells failed runs from successful ones depends on the
+agent. In the benchmark, `unsupported_answer` was informative on coding
+agents (ROC-AUC 0.78 on SWE-agent) but no better than chance on a
+customer-service agent whose answers cite its own lookups; `missing_tool_calls`
+was informative on both. Treat a check as a hint until you have seen it on
+your own agent's traces.
+
 ### Any question can keep a trace
 
 A manifest's `decision` block lists the yes/no questions that can keep a
@@ -353,14 +360,24 @@ them its own threshold:
   decision log line (`flags`) and on the exported trace (`eval.flags`), next
   to every answer (`eval.answers.<question>`). A reviewer can filter on them,
   for example every kept trace flagged `answered_on_failure`.
-- **Priority and severity.** The decision question always ranks first, then
-  `any_of` in the order written. Ranks become weights that sum to 1, falling
-  steeply from the top ([rank-order centroid](https://doi.org/10.1287/mnsc.42.11.1515)
-  weights: with six deciding questions, 0.41, 0.24, 0.16, 0.10, 0.06 and
-  0.03). A trace's **severity** is the sum of weight × answer over its flags:
-  higher for more problems, and for higher-priority ones. It does not change
-  whether a trace is kept; it ranks kept traces for review (`severity` in the
-  log, `eval.severity` on the export).
+- **Priority.** The decision question always comes first, then `any_of` in
+  the order written, then the action checks. Flags are listed in that order.
+- **Severity: the review order.** A trace's **severity** is the average
+  answer of its deciding questions, flagged or not. `action_wrong` on a
+  trace without actions is 0; a check that failed is left out of the average
+  rather than counted as 0, so an outage does not bury failed traces. Review
+  traces highest severity first. It does not change whether a trace is kept
+  (`severity` in the response and the log, `eval.severity` on the export).
+  - Why an average and not the highest answer: a trace several checks doubt
+    is more often a real failure than one a single check is sure of. On
+    τ-bench with the action checks, when 10% of runs fail and a team reviews
+    the top 5%, ranking by the highest answer finds 23% failures among the
+    traces reviewed; ranking by the average finds 47%
+    ([benchmark](bench/README.md#results)), on the runs whose label the trace
+    can show.
+  - Every deciding question counts the same, so list in `any_of` only the
+    checks you trust on your agent: a check no better than chance pulls good
+    traces up.
 - `p_keep` is the highest answer among the deciding questions.
 - Every listed question must be a `noul` question of the same manifest,
   listed once, and the model must answer all of them: a missing answer is a
@@ -372,6 +389,115 @@ them its own threshold:
 
 Without a `decision` block, the decision question decides alone, against
 `policy.keep_threshold`.
+
+### Checking an agent's actions
+
+An agent that acts for its users (cancels orders, books flights, sends
+money) fails in ways its final answer hides: it exchanges the wrong item, or
+never does one of the things the user asked, and then reports success. Name
+the tools that act in the manifest's `actions` block, each with what it does,
+worded as the user would ask:
+
+```json
+"actions": {
+  "cancel_order": "cancel an order",
+  "issue_refund": "get a refund for an order",
+  "update_shipping_address": "change the shipping address of an order"
+}
+```
+
+Each trace then gets two more checks, each its own call to the model:
+
+- **`action_wrong`**, once per action call (the last 10): does the call use
+  an argument that is not what the user asked for? The model sees the user's
+  request, the earlier tool results that hold the call's argument values
+  (where the right item or order is identified, trimmed to the parts holding
+  them), the call, and the actions after it. The trace's answer is the
+  highest over its calls.
+- **`unhandled_request`**, once per trace: for each action, did the user ask
+  for it, and was every such request carried out or explicitly declined? The
+  model sees the conversation (or, without one, the user's request), the
+  actions taken and the final answer. The answer is the highest
+  min(requested, 1 − handled) over the actions.
+
+Both are deciding checks after the decision question and any `any_of`
+questions, with `policy.keep_threshold` unless `decision.thresholds` sets
+their own. They are recorded in `answers` and flags like any question. When
+one of them, and not the decision question, keeps a trace, the reason says
+what it found: `cause` `wrong_action` ("The agent's action
+cancel_order({"order_id":"#W2"}) does not match what the user asked for.")
+or `unhandled_request` ("The user asked the agent to get a refund for an
+order, and it neither did it nor declined."). A check that fails is left out
+of the decision, and reported; on the queued path a system error redelivers
+the trace instead.
+
+**The conversation.** The completeness check reads the agent's turns: they
+show a request it declined, or one the user withdrew. Tailwise takes them
+from the agent's latest LLM span (the one with the longest
+`llm.input_messages`, plus its `llm.output_messages`), or from the JSON API's
+optional `conversation`, a list of `{"role": "user" | "assistant",
+"content": ...}`. Without them, the check sees only the user's request and
+the final answer, and flags far more successful runs (26% against 11% on
+τ-bench).
+
+**What it costs and buys.** On τ-bench's trace-detectable runs, with
+`grounded` evidence, the checks raise the failures kept from 54% to 70%, and
+the successful runs kept from 26% to 40%; the share of kept runs that failed
+barely moves (60% to 57%). They catch the failures the final answer hides:
+wrong-variant exchanges the user had described go from 33% to 90%, runs that
+left out an action from 50% to 68%. Each trace costs one call per action
+call plus one, about 2,000 input tokens each.
+
+### Heuristic rules
+
+Some failures need no model to spot: a final answer that should be JSON and
+is not, a tool call that errored, an agent calling the same tool with the
+same arguments again and again. Write them as rules. They cost nothing,
+their verdict is certain, and each fired rule is listed with a plain reason.
+
+Rules in the config file apply to every agent. An agent's manifest adds its
+own under `"rules"`, in the same form: a rule with the same name replaces
+the default, and `"enabled": false` turns it off for that agent.
+
+```yaml
+rules:
+  - name: answer_json
+    on_fail: keep                # certain: keep without asking the model
+    final_answer: {json_schema: {type: object, required: [order_id, status]}}
+  - name: tool_failed
+    on_fail: signal              # raises severity, decides nothing
+    tool_output: {ok_status: true}
+  - name: looping
+    run: {max_repeated_calls: 3}
+```
+
+Each rule sets one of:
+
+| Key | Checks | Expectations |
+| --- | --- | --- |
+| `final_answer` | the final answer | `not_empty`, `min_length`, `max_length` (characters), `matches`, `not_matches` (Go regular expressions), `json`, `json_schema` |
+| `tool_output` | the output of every call, or every call to `tool` | the same, plus `ok_status`: the call's status is `ok` |
+| `tool_args` | the arguments of every call, or every call to `tool` | `json_schema` |
+| `run` | the run as a whole | `max_tool_calls`, `max_repeated_calls` (one call, same tool and arguments, more than this many times), `requires_tools`, `forbids_tools` |
+
+A rule fires when the trace breaks any of its expectations. `on_fail` says
+what happens then:
+
+- **`keep`**: the trace is kept without asking the model, so it costs no
+  tokens. Rule `keep_rule`, cause `rule`, the rule's reason ("The final
+  answer does not match the schema: at '': missing property 'status'."),
+  severity 1, so it is reviewed first, and `p_keep` null. Use it for
+  failures that are certain.
+- **`signal`** (the default): the rule counts in severity, 1 when it fires
+  and 0 when it does not, next to the model's answers, and decides nothing.
+  Every signal rule weighs as much as a check, so a rule that fires on many
+  good traces pulls them up the review order: keep signal rules few and
+  specific.
+
+Fired rules are in the response's `rules` (`name`, `on_fail`, `reason`), the
+log line's `rules`, and the export's `eval.rules` and `eval.rules.<name>`. A
+rule that does not compile (a bad regular expression or schema, two rules
+with one name) stops Tailwise at start-up, naming the model and the rule.
 
 ### One model per agent
 
@@ -524,14 +650,14 @@ attributes that Phoenix's instrumentors emit.
 | `system_prompt` | `tailwise.system_prompt` on the root span if set; else the system message of the first `LLM` span that has one (`llm.input_messages.<i>.message.role` = `system`, its `content` or its `contents` parts joined) |
 | `question` | Root span `input.value` |
 | `final_answer` | Root span `output.value` |
-| `tool_calls` | Spans with kind `TOOL`, ordered by start time |
+| `tool_calls` | Spans with kind `TOOL`, and the code steps of an `AGENT` root, ordered by start time. A code step is a `CHAIN` child of the root with no `TOOL` span under it, whose `LLM` span wrote a fenced or `<code>` block, as in a smolagents `CodeAgent`: it becomes an `execute_code` call with the code as `{"code": ...}`, its `output.value` as the output, and an error status (with the span's status message) when the step failed |
 | tool `name` | `tool.name`, else the span name |
 | tool `args` | `input.value` if it is JSON, else `tool.parameters`, else `input.value` as a string |
 | tool `status` | `tailwise.tool.status` if set; otherwise `error` when the span status is ERROR or the output starts with `Error:` (any case), else `ok` |
 | `evidence` | First of: `tailwise.evidence.<i>` on the root span; documents on `RETRIEVER` spans; the paragraphs (split on blank lines) of successful tool outputs |
 
 When `input.value` or `output.value` holds a JSON object, the text is taken
-from a `question`/`input`/`query`/`prompt` key (or `answer`/`output`/`result`
+from a `question`/`input`/`query`/`prompt`/`task` key (or `answer`/`output`/`result`
 for outputs) when there is one. A tool output shaped as a function response,
 `{"response": {"result": "..."}}`, is unwrapped.
 
@@ -541,12 +667,15 @@ A message recorded by the Google ADK instrumentor,
 its parts, so an ADK agent's own root span works without extra attributes.
 
 A trace is **not scorable**, and is discarded with a `spans discarded` log
-line, when its root span has no `input.value` or no `output.value`. That
-covers ordinary service spans sent to the engine by mistake.
+line, when its root span has no `input.value`, or has no `output.value` and
+is not an `AGENT` span. That covers ordinary service spans sent to the engine
+by mistake.
 
-An agent run that ended without an answer is scored like any other, as long
-as its root span sets `output.value`, even to an empty string. The model then
-sees an empty final answer.
+An agent run that ended without an answer is scored like any other, with an
+empty final answer: its root span either sets `output.value` to an empty
+string, or is an `AGENT` span with no `output.value`, as when the run crashed
+or ran out of steps. Those runs nearly always failed, so they reach review
+instead of being dropped.
 
 ### Matching what the model was trained on
 
@@ -594,6 +723,9 @@ unless the embedded server runs without `queue.store_dir`.
   string for a run that ended without an answer.
 - `trace_id` is optional; the engine generates 32 hex characters if it is missing.
 - `agent` is optional and picks the model (see [One model per agent](#one-model-per-agent)); at most 128 bytes.
+- `conversation` is optional: the user's and agent's turns, each
+  `{"role": "user" | "assistant", "content": "..."}`, for the
+  [action checks](#checking-an-agents-actions).
 - `system_prompt` is optional: the instructions the agent ran under. A model
   with `scorer.system_prompt: true` sees it, cut to 8,000 characters, above
   the question; otherwise it is ignored and the model sees exactly what it
@@ -632,7 +764,7 @@ slow back end never holds up the response.
   "exported": true,
   "answers": {"answer_wrong": 0.98, "unsupported_answer": 0.12},
   "flags": ["answer_wrong"],
-  "severity": 0.40,
+  "severity": 0.98,
   "input_tokens": 412
 }
 ```
@@ -640,14 +772,16 @@ slow back end never holds up the response.
 | Field | Values |
 | --- | --- |
 | `decision` | `keep` or `drop` |
-| `p_keep` | The highest answer among the questions that decide (the decision question alone without a `decision` block); `null` on fallback |
-| `rule` | Which part of the policy decided: `above_threshold`, `random_floor`, `below_threshold` or `fallback` |
+| `p_keep` | The highest answer among the questions that decide (the decision question alone without a `decision` block); `null` on fallback and when a keep rule decided |
+| `rule` | Which part of the policy decided: `above_threshold`, `random_floor`, `below_threshold`, `fallback` or `keep_rule` (see [Heuristic rules](#heuristic-rules)) |
 | `reason` | Why the model thinks the final answer is wrong, or that it is right, in plain English (see [Reasons](#reasons)) |
 | `cause` | The model's short name for that reason, e.g. `contradicts_evidence` or `correct`; omitted when it gave none |
 | `latency_ms` | The model's reported latency; the measured time if it reports none, or on fallback |
 | `exported` | The trace was kept and queued to at least one exporter, which sends it right after |
 | `answers` | Every yes/no answer the model gave, by question; omitted on fallback |
-| `flags`, `severity` | The questions that reached their threshold, in priority order, and their weighted score (see [Any question can keep a trace](#any-question-can-keep-a-trace)); omitted when there are none |
+| `severity` | The deciding questions' average answer, with each signal rule counting 1 or 0: the order to review traces in, highest first (see [Any question can keep a trace](#any-question-can-keep-a-trace)); 1 when a keep rule decided; `null` on fallback |
+| `flags` | The questions that reached their threshold, in priority order; omitted when there are none |
+| `rules` | The [heuristic rules](#heuristic-rules) that fired, each `{name, on_fail, reason}`; omitted when none did |
 | `input_tokens` | The input tokens the model reported billing for the call; omitted if it reported none |
 | `trimmed` | `true` when the trace was too long for the model (over 40,000 characters as rendered), so the middle of its longest fields, such as a giant patch, was cut before scoring; omitted otherwise |
 
@@ -687,25 +821,28 @@ so it does not take the engine out of a load balancer; watch
 
 1. **Route.** The trace's agent picks its model (see
    [One model per agent](#one-model-per-agent)).
-2. **Slice.** `trace.BuildState` renders the trace into the text the model
+2. **Rules.** The [heuristic rules](#heuristic-rules) run. When a keep rule
+   fires, the trace is kept (rule `keep_rule`) and the model is not asked.
+3. **Slice.** `trace.BuildState` renders the trace into the text the model
    reads (see [The slice](CONTRIBUTING.md#the-slice-and-its-golden-files)).
-3. **Score.** The slice and the model's questions (its manifest's, or the
+4. **Score.** The slice and the model's questions (its manifest's, or the
    built-in ones) go to the model, in one call. A queued trace that hits a system error goes back to the
    queue for redelivery. On the synchronous endpoint, which has no queue,
    the engine retries it with `scorer.max_retries` and jittered
    `scorer.backoff`. The two kinds of retry never multiply.
-4. **Decide.** The trace is kept when any question that decides (the
+5. **Decide.** The trace is kept when any question that decides (the
    decision question, and those in the manifest's `decision.any_of`)
    reaches its threshold; those questions are its flags (see
    [Any question can keep a trace](#any-question-can-keep-a-trace)).
    - A question reached its threshold: keep, rule `above_threshold`.
    - Otherwise keep with probability `random_floor`, rule `random_floor`.
    - Otherwise drop, rule `below_threshold`.
-5. **Export.** Kept traces are queued to every exporter. Each decision produces one JSON log
-   line with `trace_id`, `agent`, `decision`, `rule`, `reason`, `cause`, `p_keep`, `model`, `latency_ms`,
+6. **Export.** Kept traces are queued to every exporter. Each decision produces one JSON log
+   line with `trace_id`, `agent`, `decision`, `rule`, `reason`, `cause`, `p_keep`, `severity`, `model`, `latency_ms`,
    `answers`, every yes/no answer by question, `flags`, the deciding
-   questions that reached their threshold, and `severity`, as in
-   `"answers": {"answer_wrong": 0.91, "unsupported_answer": 0.84, ...}, "flags": ["answer_wrong", "unsupported_answer"], "severity": 0.57`.
+   questions that reached their threshold, `rules`, the heuristic rules
+   that fired, as in
+   `"answers": {"answer_wrong": 0.91, "unsupported_answer": 0.84, ...}, "flags": ["answer_wrong", "unsupported_answer"]`.
 
 ### Reasons
 
@@ -973,14 +1110,16 @@ Root span attributes:
 | `tailwise.evidence.<i>` | string | rebuilt | Each evidence item, 0-based, untruncated |
 | `eval.agent` | string | both | The trace's agent; empty if it named none |
 | `eval.decision` | string | both | `keep` (dropped traces are not exported) |
-| `eval.rule` | string | both | Which part of the policy kept it: `above_threshold`, `random_floor`, or `fallback` (the model could not score it) |
+| `eval.rule` | string | both | Which part of the policy kept it: `above_threshold`, `random_floor`, `fallback` (the model could not score it), or `keep_rule` (a heuristic rule) |
 | `eval.reason` | string | both | Why the model thinks the final answer is wrong, in plain English |
 | `eval.cause` | string | both | The model's short name for the reason, e.g. `contradicts_evidence`; omitted when it gave none |
 | `eval.model` | string | both | The scorer model that decided |
 | `eval.latency_ms` | double | both | Scoring time in milliseconds |
 | `eval.p_keep` | double | both | The highest answer among the questions that decide; omitted on a fallback keep |
 | `eval.flags` | string | both | The deciding questions that reached their threshold, comma-separated in priority order, e.g. `answer_wrong,unsupported_answer`; omitted when none did |
-| `eval.severity` | double | both | Sum of priority weight × answer over the flags; omitted when there are none |
+| `eval.severity` | double | both | The deciding questions' average answer with the signal rules, the review order; 1 for a keep rule; omitted on fallback |
+| `eval.rules` | string | both | The heuristic rules that fired, comma-separated; omitted when none did |
+| `eval.rules.<name>` | string | both | Each fired rule's reason |
 | `eval.answers.<question>` | double | both | Each yes/no answer, e.g. `eval.answers.missing_tool_calls`; omitted on a fallback keep |
 | `eval.trimmed` | bool | both | `true` when the model saw the trace with the middle of its longest fields cut to fit; omitted otherwise |
 
@@ -1093,7 +1232,9 @@ These are open problems in the current version, not design choices to rely on.
   which flags keep them, and adjust `decision.thresholds` or the `any_of`
   list.
 - **Severity ranks traces but nothing acts on it yet.** Exporters send kept
-  traces in the order they are decided, not by severity.
+  traces in the order they are decided, not by severity, and nothing keeps a
+  fixed share such as the top 5%: the keep decision is still each check's
+  threshold. Sort by `eval.severity` in your back end to review in order.
 - **Every scored trace is a billed call to Jev, and leaves your network.**
   Nothing caps the spend or redacts fields before sending; only
   `server.workers` limits the rate.

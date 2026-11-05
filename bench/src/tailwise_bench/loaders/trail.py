@@ -18,6 +18,7 @@ spans nested under "child_spans") and `labels` (a JSON string: {"errors":
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -64,9 +65,21 @@ def load(repo: str, splits: list[str], cache: Path, limit: int | None = None) ->
         if rows and not {"trace", "labels"} <= rows[0].keys():
             raise SchemaError(f"{repo}/{split}: expected columns trace and labels, got {sorted(rows[0])}")
         n = None if limit is None else limit // len(splits) + (1 if i < limit % len(splits) else 0)
-        runs += [parse(split, json.loads(r["trace"]), json.loads(r["labels"])) for r in rows[:n]]
+        runs += [parse(split, loads(r["trace"]), loads(r["labels"])) for r in rows[:n]]
     return runs, {"runs": len(runs), "failed": sum(r.failed for r in runs),
                   "with_any_error": sum(r.meta["errors"] > 0 for r in runs)}
+
+
+_TRAILING_COMMA = re.compile(r",(\s*[\]}])")
+
+
+def loads(text: str) -> Any:
+    """JSON, tolerating the trailing commas a few hand-edited TRAIL labels
+    have (one GAIA row has "},\n    ]")."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return json.loads(_TRAILING_COMMA.sub(r"\1", text))
 
 
 def parse(split: str, trace: dict[str, Any], labels: dict[str, Any]) -> Run:

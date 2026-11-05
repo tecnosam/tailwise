@@ -121,6 +121,83 @@ def budget_curve(y: Sequence[int], s: Sequence[float], budgets: Sequence[float],
     return out
 
 
+def review_precision(y: Sequence[int], s: Sequence[float], budget: float, rates: Sequence[float],
+                     seeds: int, seed: int, groups: Sequence[str] | None = None,
+                     baseline: Sequence[float] | None = None) -> dict[str, Any]:
+    """The headline: a team reviews the top `budget` share of runs by score;
+    what share of those failed? At the dataset's own failure rate, and at each
+    production failure rate in `rates`. The datasets fail far more often than
+    production agents, so for each rate, failed runs (or, above the dataset's
+    rate, successful ones) are dropped at random until `rate` of runs fail.
+
+    Each of the `seeds` draws first resamples the tasks in `groups` with
+    replacement (each run its own task without them): runs of one task are
+    not independent, so the 95% interval covers which tasks the dataset
+    happened to contain, not only which runs were dropped. With `baseline`
+    scores, each draw also ranks the same runs by them, and "vs_baseline" is
+    the gain in precision: its mean, 95% interval, and the share of draws in
+    which the baseline did at least as well.
+
+    Random review finds failures at the failure rate; a perfect ranker finds
+    min(1, rate / budget)."""
+    ya, sa = _arrays(y, s)
+    ba = np.asarray(baseline, dtype=float) if baseline is not None else None
+    if ba is not None and ba.shape != sa.shape:
+        raise ValueError("baseline and scores differ in length")
+    g = np.asarray(groups if groups is not None else range(len(ya)))
+    if g.shape != ya.shape:
+        raise ValueError("groups and labels differ in length")
+
+    def top(idx: Array, scores: Array, tie_seed: int) -> float:
+        k = budget_k(budget, len(idx))
+        return float(ya[idx[rank_order(scores[idx], tie_seed)[:k]]].mean()) if k else float("nan")
+
+    def ci(v: Array) -> list[float]:
+        return [float(np.percentile(v, 2.5)), float(np.percentile(v, 97.5))]
+
+    real = float(ya.mean()) if len(ya) else None
+    out: dict[str, Any] = {
+        "budget": budget,
+        "real": {"failure_rate": real, "precision": top(np.arange(len(ya)), sa, seed) if len(ya) else None,
+                 "best_possible": min(1.0, real / budget) if real is not None else None},
+        "at_rate": {},
+    }
+    if not (ya == 1).any() or not (ya == 0).any():
+        return out
+    tasks, members = np.unique(g, return_inverse=True)
+    by_task = [np.flatnonzero(members == t) for t in range(len(tasks))]
+    rng = np.random.default_rng(seed + 2)
+    for rate in rates:
+        vals, gains = [], []
+        for i in range(seeds):
+            pool = np.concatenate([by_task[t] for t in rng.integers(len(tasks), size=len(tasks))])
+            fail, ok = pool[ya[pool] == 1], pool[ya[pool] == 0]
+            if not len(fail) or not len(ok):
+                continue
+            n_fail = round(rate / (1 - rate) * len(ok))
+            if n_fail <= len(fail):
+                idx = np.concatenate([rng.choice(fail, n_fail, replace=False), ok])
+            else:
+                n_ok = min(len(ok), round(len(fail) * (1 - rate) / rate))
+                idx = np.concatenate([fail, rng.choice(ok, n_ok, replace=False)])
+            vals.append(top(idx, sa, seed + 3 + i))
+            if ba is not None:
+                gains.append(vals[-1] - top(idx, ba, seed + 3 + i))
+        v = np.asarray(vals)
+        n_fail, n_ok = int((ya == 1).sum()), int((ya == 0).sum())
+        row: dict[str, Any] = {
+            "precision": float(v.mean()), "ci95": ci(v),
+            "lift": float(v.mean()) / rate, "best_possible": min(1.0, rate / budget),
+            # Reviewed runs per draw: few means a noisy estimate.
+            "reviewed": budget_k(budget, min(len(ya), round(n_ok / (1 - rate)), round(n_fail / rate))),
+        }
+        if gains:
+            d = np.asarray(gains)
+            row["vs_baseline"] = {"gain": float(d.mean()), "ci95": ci(d), "not_better": float((d <= 0).mean())}
+        out["at_rate"][str(rate)] = row
+    return out
+
+
 def calibration(y: Sequence[int], s: Sequence[float], bins: int = 10) -> dict[str, Any]:
     """Reliability-diagram data and expected calibration error, equal-width bins."""
     ya, sa = _arrays(y, s)

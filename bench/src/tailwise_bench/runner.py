@@ -13,13 +13,17 @@ from .budget import BudgetExceeded
 from .cache import TRACE, ScoreCache
 from .client import ScoringClient
 from .config import Config
-from .otel import run_trace
+from .otel import _value, run_trace
 from .tokens import Estimator
 from .types import Run
 
 Key = tuple[str, str, str, str, str]
 
 TAILWISE_MAX_STATE_CHARS = 40000  # trace.MaxStateChars: Tailwise cuts longer states to fit
+# Rough sizes of the action checks beyond the user's request, for estimates:
+# an action check's lookups, action and question; completeness questions.
+ACTION_CHECK_TOKENS = 900
+COMPLETENESS_TOKENS_PER_ACTION = 70
 
 
 def key(run: Run, payload: dict[str, Any], cfg: Config) -> Key:
@@ -34,8 +38,19 @@ def tokens_for(run: Run, state: str, est: Estimator, cfg: Config) -> int:
     grounded evidence strategy, the tool results it adds (about 4 characters
     per token)."""
     tokens = est.call(shown(state, cfg)[:TAILWISE_MAX_STATE_CHARS])
+    actions = cfg.actions
+    if actions:
+        # The action checks: one call per action call (its request, lookups and
+        # neighbours), and one for completeness (request, actions, answer).
+        question = est.count(run.question)
+        tokens += sum(question + ACTION_CHECK_TOKENS for c in run.tool_calls if c.name in actions)
+        turns = sum(est.count(text[:600] if role == "assistant" else text) for role, text in run.messages)
+        tokens += (turns or question) + est.count(run.final_answer) + COMPLETENESS_TOKENS_PER_ACTION * len(actions)
     if cfg.tailwise.evidence == "grounded":
-        tokens += min(cfg.tailwise.evidence_budget, sum(len(c.output) for c in run.tool_calls)) // 4
+        outputs = (sum(len(_value(s, "output.value")) for s in run.otlp_spans
+                       if _value(s, "openinference.span.kind") == "TOOL")
+                   if run.otlp_spans else sum(len(c.output) for c in run.tool_calls))
+        tokens += min(cfg.tailwise.evidence_budget, outputs) // 4
     return tokens
 
 

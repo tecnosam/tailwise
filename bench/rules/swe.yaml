@@ -1,0 +1,8 @@
+# Heuristic rules for SWE-agent, written from how the agent works, before
+# looking at any result. Never tuned on the labels.
+rules:
+  # SWE-agent hands in its patch with the submit command; a run that never
+  # submits produced no patch, so it has certainly not fixed the issue.
+  - name: no_submit
+    on_fail: keep
+    run: {requires_tools: [submit]}

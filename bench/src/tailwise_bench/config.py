@@ -28,6 +28,9 @@ class Tailwise:
     system_prompt: bool = False
     evidence: str = "grounded"
     evidence_budget: int = 12000
+    # A folder of <dataset>.yaml heuristic rule files; "" runs none. Not part
+    # of the score cache: rules do not change what Jev is asked.
+    rules: str = ""
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,7 @@ class Config:
     seed: int = 0
     random_seeds: int = 100
     budgets: tuple[float, ...] = (0.01, 0.05, 0.10, 0.20, 0.30, 0.50)
+    review_budget: float = 0.05
     reference_failure_rates: tuple[float, ...] = (0.02, 0.05, 0.10, 0.20)
     tailwise: Tailwise = Tailwise()
     cost: Cost = Cost()
@@ -93,8 +97,25 @@ class Config:
         return self.resolve(self.tailwise.manifest).read_text()
 
     @property
+    def actions(self) -> dict[str, str]:
+        """The manifest's actions block: the tools the action checks cover."""
+        text = self.manifest_text
+        return dict(json.loads(text).get("actions") or {}) if text else {}
+
+    def deciding_questions(self, decision_question: str) -> list[str]:
+        """The questions Tailwise's severity averages: the decision question,
+        the manifest's decision.any_of, then the action checks."""
+        text = self.manifest_text
+        manifest = json.loads(text) if text else {}
+        out = [decision_question, *((manifest.get("decision") or {}).get("any_of") or [])]
+        if manifest.get("actions"):
+            out += ["action_wrong", "unhandled_request"]
+        return out
+
+    @property
     def variant(self) -> str:
-        return Path(self.tailwise.manifest).stem if self.tailwise.manifest else "builtin"
+        name = Path(self.tailwise.manifest).stem if self.tailwise.manifest else "builtin"
+        return name + ("+rules" if self.tailwise.rules else "")
 
     def score_hash(self) -> str:
         """Hash of everything that changes what Jev is sent or how it is read,
@@ -132,7 +153,7 @@ def _state_code_hash(repo: Path) -> str:
 
 def load(path: Path) -> Config:
     raw = yaml.safe_load(path.read_text()) or {}
-    known = {"seed", "random_seeds", "budgets", "reference_failure_rates", "tailwise", "cost", "client",
+    known = {"seed", "random_seeds", "budgets", "review_budget", "reference_failure_rates", "tailwise", "cost", "client",
              "datasets", "cache_dir", "results_dir"}
     if unknown := set(raw) - known:
         raise ValueError(f"{path}: unknown keys {sorted(unknown)}")
@@ -143,6 +164,7 @@ def load(path: Path) -> Config:
         seed=int(raw.get("seed", 0)),
         random_seeds=int(raw.get("random_seeds", 100)),
         budgets=tuple(float(b) for b in raw.get("budgets", Config.budgets)),
+        review_budget=float(raw.get("review_budget", Config.review_budget)),
         reference_failure_rates=tuple(float(r) for r in raw.get("reference_failure_rates", Config.reference_failure_rates)),
         tailwise=Tailwise(**raw.get("tailwise", {})),
         cost=Cost(**raw.get("cost", {})),
@@ -151,6 +173,6 @@ def load(path: Path) -> Config:
         cache_dir=str(raw.get("cache_dir", ".cache")),
         results_dir=str(raw.get("results_dir", "results")),
     )
-    if not all(0 < b <= 1 for b in (*cfg.budgets, *cfg.reference_failure_rates)):
-        raise ValueError("budgets and reference_failure_rates must be shares in (0, 1]")
+    if not all(0 < b <= 1 for b in (*cfg.budgets, cfg.review_budget, *cfg.reference_failure_rates)):
+        raise ValueError("budgets, review_budget and reference_failure_rates must be shares in (0, 1]")
     return cfg

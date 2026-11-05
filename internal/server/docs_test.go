@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tecnosam/tailwise/internal/pipeline"
+	"github.com/tecnosam/tailwise/internal/rules"
 	"github.com/tecnosam/tailwise/internal/trace"
 	"gopkg.in/yaml.v3"
 )
@@ -96,8 +97,13 @@ func TestOpenAPIDecisionMatchesResult(t *testing.T) {
 		return pipeline.Score{P: 0.9, Model: "m", Cause: "incomplete", Explanation: "The final answer leaves out part of what the question asked.",
 			Answers: answers, Deciding: answers, InputTokens: 410}, nil
 	}}
-	models := pipeline.SingleModel(pipeline.Model{Name: "m", Scorer: everything,
-		Checks: []pipeline.Check{{Question: "answer_wrong", Weight: 1}}})
+	// A signal rule the long answer breaks, so the response lists it.
+	tooLong, err := rules.New([]rules.Config{{Name: "short", FinalAnswer: &rules.Text{MaxLength: 100}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := pipeline.SingleModel(pipeline.Model{Name: "m", Scorer: everything, Rules: tooLong,
+		Checks: []pipeline.Check{{Question: "answer_wrong"}}})
 	h := newHarness(t, harnessOpts{scorer: everything, models: models})
 	// An answer too long for the model, so the response is marked trimmed.
 	long := strings.Repeat("a", trace.MaxStateChars)

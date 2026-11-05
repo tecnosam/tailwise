@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/tecnosam/tailwise/internal/fault"
@@ -73,20 +74,41 @@ func (e *Engine) run(ctx context.Context, t trace.Trace, deferSystemErrors bool)
 
 func (e *Engine) decide(ctx context.Context, t trace.Trace, start time.Time, deferSystemErrors bool) (Record, error) {
 	model := e.deps.Models.Route(t.Agent)
+	var verdicts []RuleResult
+	if model.Rules != nil {
+		verdicts = model.Rules.Check(t)
+	}
+	// A keep rule is certain, so the model is not asked.
+	if r, ok := firstKeep(verdicts); ok {
+		return keptByRule(t, model, r, verdicts), nil
+	}
 	state, trimmed := buildState(t, model)
 	score, err := e.score(ctx, t, state, model, deferSystemErrors)
+	var findings actionFindings
+	if err == nil && model.Actions != nil {
+		findings, err = e.checkActions(ctx, t, model, deferSystemErrors)
+		findings.apply(&score, hasAction(t, model.Actions))
+	}
 	e.deps.Metrics.ScoreFinished(ctx, ScoreResult{Agent: model.Agent, Model: model.Name, Duration: time.Since(start), Err: err})
 	var rec Record
 	switch {
 	case err == nil:
-		rec = e.scored(t, model, score)
+		rec = e.scored(t, model, score, findings, verdicts)
 	case deferSystemErrors && isSystemError(err):
 		return Record{}, err
 	default:
 		rec = e.fallback(ctx, t, model, err, time.Since(start))
 	}
 	rec.Trimmed = trimmed
+	rec.Rules = fired(verdicts)
 	return rec, nil
+}
+
+// keptByRule is the decision a keep rule made: kept, first in the review
+// order, with the rule's reason.
+func keptByRule(t trace.Trace, model Model, r RuleResult, verdicts []RuleResult) Record {
+	d := Decision{Keep: true, Rule: RuleKeepRule, Reason: r.Reason, Cause: CauseRule, Severity: 1}
+	return Record{Trace: t, Agent: model.Agent, Decision: d, Model: model.Name, Rules: fired(verdicts)}
 }
 
 // buildState renders the trace as the model is set to see it, cut to
@@ -105,24 +127,54 @@ func buildState(t trace.Trace, model Model) (trace.State, bool) {
 // On the queued path a system error is returned at once and the queue
 // redelivers; the synchronous path has no queue, so it retries here.
 func (e *Engine) score(ctx context.Context, t trace.Trace, state trace.State, model Model, queued bool) (Score, error) {
+	var score Score
+	err := e.withRetry(ctx, t, model, queued, "score trace", func() error {
+		var err error
+		score, err = model.Scorer.Score(ctx, state)
+		return err
+	})
+	return score, err
+}
+
+// withRetry makes a model call, retrying it on the synchronous path.
+func (e *Engine) withRetry(ctx context.Context, t trace.Trace, model Model, queued bool, op string, call func() error) error {
 	for attempt := 1; ; attempt++ {
-		score, err := model.Scorer.Score(ctx, state)
+		err := call()
 		if err == nil || queued || !fault.Retryable(err) || model.Retry.Exhausted(attempt) || ctx.Err() != nil {
-			return score, err
+			return err
 		}
 		delay := model.Retry.Delay(attempt)
-		e.deps.Reporter.Report(ctx, fault.New(fault.KindOf(err), fault.Pipeline, "score trace, will retry", err).
+		e.deps.Reporter.Report(ctx, fault.New(fault.KindOf(err), fault.Pipeline, fault.Op(op+", will retry"), err).
 			WithTrace(t.TraceID).With("model", model.Name).With("attempt", attempt).
 			With("max_attempts", model.Retry.Attempts).With("retry_in", delay.String()))
 		if err := retry.Sleep(ctx, delay); err != nil {
-			return Score{}, err
+			return err
 		}
 	}
 }
 
-func (e *Engine) scored(t trace.Trace, model Model, score Score) Record {
-	d, flags := e.deps.Policy.DecideChecks(score.P, model.Checks, score.Deciding)
+func (e *Engine) reportCheckFailure(ctx context.Context, t trace.Trace, model Model, err error) {
+	e.deps.Reporter.Report(ctx, fault.New(fault.KindOf(err), fault.Pipeline, "action check failed, deciding without it", err).
+		WithTrace(t.TraceID).With("agent", model.Agent).With("model", model.Name))
+}
+
+func hasAction(t trace.Trace, a *Actions) bool {
+	for _, c := range t.ToolCalls {
+		if a.isAction(c.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) scored(t trace.Trace, model Model, score Score, findings actionFindings, verdicts []RuleResult) Record {
+	d, flags := e.deps.Policy.DecideChecks(score.P, model.Checks, score.Deciding, signals(verdicts)...)
 	d.Cause, d.Reason = score.Cause, score.Explanation
+	// The decision question's reason explains it best; when only an action
+	// check kept the trace, say what that check found instead.
+	if len(flags) > 0 && len(model.Checks) > 0 && !slices.Contains(flags, model.Checks[0].Question) {
+		d.Cause, d.Reason = findings.reason(flags[0])
+	}
 	if d.Reason == "" {
 		d.Reason = probabilityReason(score.P)
 	}
@@ -179,8 +231,18 @@ func (e *Engine) logDecision(out Outcome) {
 	if d.Scored {
 		attrs = append(attrs, "p_keep", float64(d.PKeep))
 	}
+	if d.Ranked() {
+		attrs = append(attrs, "severity", d.Severity)
+	}
+	if len(rec.Rules) > 0 {
+		names := make([]string, len(rec.Rules))
+		for i, r := range rec.Rules {
+			names[i] = r.Name
+		}
+		attrs = append(attrs, "rules", names)
+	}
 	if rec.Flags != nil {
-		attrs = append(attrs, "flags", rec.Flags, "severity", d.Severity)
+		attrs = append(attrs, "flags", rec.Flags)
 	}
 	if rec.Trimmed {
 		attrs = append(attrs, "trimmed", true)

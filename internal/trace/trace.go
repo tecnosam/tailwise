@@ -29,10 +29,20 @@ type Trace struct {
 	// FinalAnswer must be present but may be empty: a run that ended without an
 	// answer is still scored.
 	FinalAnswer string `json:"final_answer"`
+	// Conversation is the user's and the agent's turns in order, when known:
+	// the completeness check reads it to see what the agent said, such as a
+	// request it declined.
+	Conversation []Message `json:"conversation,omitempty"`
 
 	// OTLP holds the original spans of a trace that came through the OTLP
 	// receivers; a kept trace is forwarded as them instead of being rebuilt.
 	OTLP []byte `json:"otlp_spans,omitempty"`
+}
+
+// Message is one turn of the conversation.
+type Message struct {
+	Role    string `json:"role"` // user or assistant
+	Content string `json:"content"`
 }
 
 // Args and Status stay raw: the slice writes them as JSON and needs to know
@@ -107,6 +117,11 @@ func (t Trace) Validate() error {
 	for i, c := range t.ToolCalls {
 		if c.Name == "" {
 			return fmt.Errorf("tool_calls[%d].name is required", i)
+		}
+	}
+	for i, m := range t.Conversation {
+		if m.Role != "user" && m.Role != "assistant" {
+			return fmt.Errorf("conversation[%d].role must be user or assistant, got %q", i, m.Role)
 		}
 	}
 	return nil

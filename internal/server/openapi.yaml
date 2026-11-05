@@ -106,6 +106,7 @@ paths:
                     trace_id: wrong-river-001
                     decision: keep
                     p_keep: 0.98
+                    severity: 0.98
                     rule: above_threshold
                     reason: The final answer contradicts the evidence the agent gathered.
                     cause: contradicts_evidence
@@ -118,6 +119,7 @@ paths:
                     trace_id: 7f3a91c2e8
                     decision: drop
                     p_keep: 0.04
+                    severity: 0.04
                     rule: below_threshold
                     reason: The final answer is correct, complete and supported by the evidence.
                     cause: correct
@@ -130,6 +132,7 @@ paths:
                     trace_id: wrong-river-001
                     decision: drop
                     p_keep: null
+                    severity: null
                     rule: fallback
                     reason: The model could not score this trace, so it was dropped at random.
                     model: jev-latest
@@ -192,13 +195,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "422":
-          description: No root span has a question (`input.value`) and an answer (`output.value`).
+          description: No root span has a question (`input.value`) and an answer (`output.value`); an `AGENT` root without an answer is scored with an empty one.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
               example:
-                error: 'trace is not scorable: root span "agent_run" has no output.value'
+                error: 'trace is not scorable: root span "GET /users" has no input.value'
   /healthz:
     get:
       tags: [health]
@@ -334,6 +337,21 @@ components:
           description: Tool calls the agent made, in order.
           items:
             $ref: "#/components/schemas/ToolCall"
+        conversation:
+          type: array
+          description: >-
+            The user's and agent's turns, in order. Optional; the action
+            checks read it to see what the agent said, such as a request it
+            declined.
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role:
+                type: string
+                enum: [user, assistant]
+              content:
+                type: string
         evidence:
           type: array
           description: |
@@ -375,7 +393,7 @@ components:
           example: c68863b8105c8e95f34eba6666e18d91
     Decision:
       type: object
-      required: [trace_id, agent, decision, p_keep, rule, reason, model, latency_ms, exported]
+      required: [trace_id, agent, decision, p_keep, severity, rule, reason, model, latency_ms, exported]
       properties:
         trace_id:
           type: string
@@ -391,16 +409,20 @@ components:
           nullable: true
           minimum: 0
           maximum: 1
-          description: The model's probability that the final answer is wrong. Null on fallback.
+          description: >-
+            The model's probability that the final answer is wrong. Null on
+            fallback, and when a keep rule decided, since the model was not
+            asked.
         rule:
           type: string
-          enum: [above_threshold, random_floor, below_threshold, fallback]
+          enum: [above_threshold, random_floor, below_threshold, fallback, keep_rule]
           description: |
             Which part of the policy decided:
             - `above_threshold`: kept because `p_keep` reached the keep threshold
             - `random_floor`: below the threshold, kept as a random sample
             - `below_threshold`: below the threshold and not sampled; dropped
             - `fallback`: the model could not score it; kept or dropped at random
+            - `keep_rule`: a heuristic rule with `on_fail: keep` fired; kept without asking the model
         reason:
           type: string
           description: >-
@@ -446,7 +468,36 @@ components:
         severity:
           type: number
           format: double
-          description: The flags' priority-weighted answers summed; ranks kept traces for review. Omitted when 0.
+          nullable: true
+          minimum: 0
+          maximum: 1
+          description: >-
+            The deciding questions' average answer: the order to review traces in, highest first.
+            A trace several checks doubt ranks above one a single check is sure of. Each signal
+            rule counts in the average too, 1 when it fired and 0 when not. 1 when a keep rule
+            decided. Null on fallback.
+        rules:
+          type: array
+          description: >-
+            The heuristic rules that fired, in the config's order. Omitted
+            when none did.
+          items:
+            type: object
+            required: [name, on_fail, reason]
+            properties:
+              name:
+                type: string
+              on_fail:
+                type: string
+                enum: [keep, signal]
+                description: "`keep`: the rule kept the trace. `signal`: it raised the trace's severity only."
+              reason:
+                type: string
+                description: What the trace broke, in plain English.
+          example:
+            - name: answer_json
+              on_fail: keep
+              reason: The final answer is not valid JSON.
         input_tokens:
           type: integer
           description: The input tokens the model reported billing for the call. Omitted if it reported none, and on fallback.

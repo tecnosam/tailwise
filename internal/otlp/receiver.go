@@ -206,7 +206,7 @@ func ReadExport(w http.ResponseWriter, req *http.Request) (export *coltracepb.Ex
 	}
 	export = &coltracepb.ExportTraceServiceRequest{}
 	if contentType == contentTypeJSON {
-		err = unmarshalJSON(body, export)
+		err = UnmarshalJSON(body, export)
 	} else {
 		err = proto.Unmarshal(body, export)
 	}

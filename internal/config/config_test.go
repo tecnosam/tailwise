@@ -1,6 +1,8 @@
 package config
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -421,7 +423,7 @@ func TestManifestDecisionAnyOf(t *testing.T) {
 		`{"any_of": []}`:                        "must list questions in any_of or set thresholds",
 		`{"any_of": ["checks", "checks"]}`:      `"checks" is listed twice`,
 		`{"any_of": ["answer_wrong"]}`:          `"answer_wrong" is listed twice, or is the decision question`,
-		`{"thresholds": {"checks": 0.6}}`:       `"checks" is neither the decision question nor in any_of`,
+		`{"thresholds": {"checks": 0.6}}`:       `"checks" is neither the decision question, in any_of, nor an action check`,
 		`{"thresholds": {"answer_wrong": 0}}`:   "want a number in (0, 1]",
 		`{"thresholds": {"answer_wrong": 1.5}}`: "want a number in (0, 1]",
 		`{"any_of": ["tone"]}`:                  `question "tone" not found`,
@@ -434,7 +436,7 @@ func TestManifestDecisionAnyOf(t *testing.T) {
 }
 
 // The deciding questions become checks in priority order, the decision
-// question first, weighted by rank, each with its own threshold or none.
+// question first, each with its own threshold or none.
 func TestManifestDecisionChecks(t *testing.T) {
 	manifest := `{"questions": {"answer_wrong": {"type": "noul"}, "a": {"type": "noul"}, "b": {"type": "noul"}},` +
 		` "decision": {"any_of": ["b", "a"], "thresholds": {"answer_wrong": 0.8, "a": 0.6}}}`
@@ -449,17 +451,14 @@ func TestManifestDecisionChecks(t *testing.T) {
 	if checks[0].Threshold != 0.8 || checks[1].Threshold != 0 || checks[2].Threshold != 0.6 {
 		t.Errorf("thresholds = %v %v %v, want 0.8, the policy's (0) and 0.6", checks[0].Threshold, checks[1].Threshold, checks[2].Threshold)
 	}
-	if !(checks[0].Weight > checks[1].Weight && checks[1].Weight > checks[2].Weight) {
-		t.Errorf("weights = %v %v %v, want them falling with priority", checks[0].Weight, checks[1].Weight, checks[2].Weight)
-	}
 
 	// Without a decision block, the decision question is the one check.
 	cfg, err = Load(write(t, "scorer:\n  manifest: manifest.json\n", testManifest))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := cfg.Models.Default.Checks; len(c) != 1 || c[0] != (pipeline.Check{Question: "answer_wrong", Weight: 1}) {
-		t.Errorf("checks = %+v, want answer_wrong alone with weight 1", c)
+	if c := cfg.Models.Default.Checks; len(c) != 1 || c[0] != (pipeline.Check{Question: "answer_wrong"}) {
+		t.Errorf("checks = %+v, want answer_wrong alone", c)
 	}
 }
 
@@ -500,6 +499,57 @@ func TestEvidenceStrategy(t *testing.T) {
 	for _, bad := range []string{"scorer:\n  evidence: everything\n", "scorer:\n  evidence_budget: 0\n"} {
 		if _, err := Load(write(t, bad, "")); err == nil || !strings.Contains(err.Error(), "evidence") {
 			t.Errorf("%q: error = %v", bad, err)
+		}
+	}
+}
+
+// A manifest's actions block turns on the action checks: their questions,
+// and two more deciding checks after the decision question.
+func TestManifestActions(t *testing.T) {
+	cfg, err := Load(write(t, "scorer:\n  manifest: manifest.json\n", testManifest))
+	if err != nil || cfg.Models.Default.Actions != nil {
+		t.Fatalf("no actions block: actions %+v, error %v", cfg.Models.Default.Actions, err)
+	}
+
+	manifest := `{"questions": {"answer_wrong": {"type": "noul"}},` +
+		` "actions": {"cancel_order": "cancel an order", "book": "book a flight"},` +
+		` "decision": {"thresholds": {"unhandled_request": 0.7}}}`
+	cfg, err = Load(write(t, "scorer:\n  manifest: manifest.json\n", manifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := cfg.Models.Default
+	if m.Actions == nil || m.Actions.Tools["cancel_order"] != "cancel an order" {
+		t.Fatalf("actions = %+v", m.Actions)
+	}
+	var got []string
+	for _, c := range m.Checks {
+		got = append(got, fmt.Sprintf("%s@%v", c.Question, c.Threshold))
+	}
+	if want := []string{"answer_wrong@0", "action_wrong@0", "unhandled_request@0.7"}; !slices.Equal(got, want) {
+		t.Errorf("checks = %q, want %q", got, want)
+	}
+	// Completeness asks a requested/handled pair per action, in name order.
+	qs := string(m.Actions.CompletenessQuestions)
+	for _, want := range []string{`"requested_book"`, `"handled_book"`, `"requested_cancel_order"`,
+		`did the user ask the agent to cancel an order?`} {
+		if !strings.Contains(qs, want) {
+			t.Errorf("completeness questions lack %q: %s", want, qs)
+		}
+	}
+	if strings.Index(qs, "requested_book") > strings.Index(qs, "requested_cancel_order") {
+		t.Errorf("completeness questions out of order: %s", qs)
+	}
+	if !json.Valid(m.Actions.ActionQuestions) || !strings.Contains(string(m.Actions.ActionQuestions), `"action_wrong"`) {
+		t.Errorf("action questions = %s", m.Actions.ActionQuestions)
+	}
+
+	for bad, wantErr := range map[string]string{
+		`{"questions": {"answer_wrong": {"type": "noul"}}, "actions": {"cancel": ""}}`:                                         "needs a name and a description",
+		`{"questions": {"answer_wrong": {"type": "noul"}, "action_wrong": {"type": "noul"}}, "actions": {"cancel": "cancel"}}`: "rename the question",
+	} {
+		if _, err := Load(write(t, "scorer:\n  manifest: manifest.json\n", bad)); err == nil || !strings.Contains(err.Error(), wantErr) {
+			t.Errorf("%s: error = %v, want %q", bad, err, wantErr)
 		}
 	}
 }

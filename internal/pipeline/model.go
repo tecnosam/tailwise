@@ -27,6 +27,11 @@ type Model struct {
 	// results on the tool-call lines.
 	Evidence       string
 	EvidenceBudget int
+	// Actions turns on the action checks; nil leaves them off. The Scorer
+	// must be an Asker.
+	Actions *Actions
+	// Rules are the heuristic rules; nil has none.
+	Rules Rules
 	// Agent is set by Route.
 	Agent AgentLabel
 }

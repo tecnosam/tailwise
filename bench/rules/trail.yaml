@@ -1,0 +1,17 @@
+# Heuristic rules for TRAIL's smolagents runs (GAIA and SWE-bench), written
+# from how the agents work, before looking at any result. TRAIL is for
+# evaluation only: these are never tuned on it.
+rules:
+  # A run that ends without an answer has failed its task.
+  - name: no_answer
+    on_fail: keep
+    final_answer: {not_empty: true}
+  # A code step raised an error: the agent may recover, so it only raises
+  # the review order.
+  - name: code_failed
+    on_fail: signal
+    tool_output: {tool: execute_code, ok_status: true}
+  # The same call three times with the same arguments: stuck.
+  - name: looping
+    on_fail: signal
+    run: {max_repeated_calls: 2}

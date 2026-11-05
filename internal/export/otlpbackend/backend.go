@@ -110,9 +110,19 @@ func evalAttrs(rec pipeline.Record) []*commonpb.KeyValue {
 	if d.Scored {
 		attrs = append(attrs, otlp.FloatAttr("eval.p_keep", float64(d.PKeep)))
 	}
+	if d.Ranked() {
+		attrs = append(attrs, otlp.FloatAttr("eval.severity", d.Severity))
+	}
 	if len(rec.Flags) > 0 {
-		attrs = append(attrs, otlp.StringAttr("eval.flags", strings.Join(rec.Flags, ",")),
-			otlp.FloatAttr("eval.severity", d.Severity))
+		attrs = append(attrs, otlp.StringAttr("eval.flags", strings.Join(rec.Flags, ",")))
+	}
+	if len(rec.Rules) > 0 {
+		names := make([]string, len(rec.Rules))
+		for i, r := range rec.Rules {
+			names[i] = r.Name
+			attrs = append(attrs, otlp.StringAttr("eval.rules."+r.Name, r.Reason))
+		}
+		attrs = append(attrs, otlp.StringAttr("eval.rules", strings.Join(names, ",")))
 	}
 	if rec.Trimmed {
 		attrs = append(attrs, otlp.BoolAttr("eval.trimmed", true))

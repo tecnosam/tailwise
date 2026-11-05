@@ -20,6 +20,10 @@ type ModelConfig struct {
 	// trace.EvidenceGrounded); EvidenceBudget bounds the grounded results.
 	Evidence       string
 	EvidenceBudget int
+	// Actions turns on the action checks; nil leaves them off.
+	Actions *pipeline.Actions
+	// Rules are the heuristic rules; nil has none.
+	Rules pipeline.Rules
 }
 
 type Models struct {
@@ -47,5 +51,6 @@ func buildModel(mc ModelConfig) (pipeline.Model, error) {
 		return pipeline.Model{}, err
 	}
 	return pipeline.Model{Name: pipeline.ModelName(mc.Client.Model), Scorer: s, Retry: mc.Retry, Checks: mc.Checks,
-		SystemPrompt: mc.SystemPrompt, Evidence: mc.Evidence, EvidenceBudget: mc.EvidenceBudget}, nil
+		SystemPrompt: mc.SystemPrompt, Evidence: mc.Evidence, EvidenceBudget: mc.EvidenceBudget, Actions: mc.Actions,
+		Rules: mc.Rules}, nil
 }

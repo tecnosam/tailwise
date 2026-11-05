@@ -95,3 +95,34 @@ def test_flag_stats():
     assert out["a"]["recall"] == 1.0 and out["a"]["false_positive_rate"] == 0.5
     assert out["b"] == {"flagged": 1, "flagged_failed": 1, "precision": 1.0, "recall": 0.5, "false_positive_rate": 0.0}
     assert list(out) == ["a", "b"]  # most flagged first
+
+
+def test_review_precision_perfect_ranker_and_random():
+    y = [1] * 50 + [0] * 950
+    perfect = metrics.review_precision(y, [float(v) for v in y], 0.05, (0.10, 0.02), seeds=20, seed=0)
+    assert perfect["real"]["precision"] == 1.0  # 50 reviewed, all 50 failures
+    assert perfect["at_rate"]["0.1"]["precision"] == pytest.approx(1.0)  # more failures than reviewed
+    # At 2% failing, the top 5% holds every failure and successes besides.
+    assert perfect["at_rate"]["0.02"]["precision"] == pytest.approx(0.4, abs=0.02)
+    assert perfect["at_rate"]["0.02"]["best_possible"] == pytest.approx(0.4)
+
+    flat = metrics.review_precision(y, [0.5] * len(y), 0.05, (0.10,), seeds=200, seed=0)
+    assert flat["at_rate"]["0.1"]["precision"] == pytest.approx(0.10, abs=0.02)  # ties: random review
+
+
+def test_review_precision_single_class_has_no_rates():
+    r = metrics.review_precision([0, 0, 0], [0.1, 0.2, 0.3], 0.05, (0.1,), seeds=5, seed=0)
+    assert r["real"]["precision"] == 0 and r["at_rate"] == {}
+
+
+def test_review_precision_resamples_tasks_and_compares_a_baseline():
+    # Two tasks, each run 10 times: the better ranker sees failures first.
+    y = [1] * 5 + [0] * 5 + [1] * 5 + [0] * 5
+    good = [1.0 if v else 0.0 for v in y]
+    groups = ["a"] * 10 + ["b"] * 10
+    out = metrics.review_precision(y, good, 0.1, [0.5], seeds=20, seed=0, groups=groups,
+                                   baseline=[0.5] * len(y))
+    at = out["at_rate"]["0.5"]
+    assert at["precision"] == 1.0
+    assert at["vs_baseline"]["gain"] > 0 and at["vs_baseline"]["ci95"][0] >= 0
+    assert 0 <= at["vs_baseline"]["not_better"] < 1

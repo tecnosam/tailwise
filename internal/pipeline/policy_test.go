@@ -101,34 +101,13 @@ func TestDefaultRandomSourceRate(t *testing.T) {
 	}
 }
 
-func TestPriorityWeights(t *testing.T) {
-	for n, want := range map[int][]float64{
-		1: {1},
-		2: {0.75, 0.25},
-		3: {0.611, 0.278, 0.111},
-	} {
-		got := PriorityWeights(n)
-		sum := 0.0
-		for i := range got {
-			sum += got[i]
-			if math.Abs(got[i]-want[i]) > 1e-3 {
-				t.Errorf("PriorityWeights(%d) = %v, want %v", n, got, want)
-				break
-			}
-		}
-		if math.Abs(sum-1) > 1e-9 {
-			t.Errorf("PriorityWeights(%d) sums to %v, want 1", n, sum)
-		}
-	}
-}
-
-// Any check reaching its own threshold keeps the trace and flags it; the
-// flagged checks' weight × answer add up to its severity.
+// Any check reaching its own threshold keeps the trace and flags it; its
+// severity is the checks' average answer, flagged or not.
 func TestDecideChecks(t *testing.T) {
 	checks := []Check{
-		{Question: "answer_wrong", Weight: 0.6},
-		{Question: "unsupported", Threshold: 0.8, Weight: 0.3},
-		{Question: "missing_tools", Weight: 0.1},
+		{Question: "answer_wrong"},
+		{Question: "unsupported", Threshold: 0.8},
+		{Question: "missing_tools"},
 	}
 	tests := []struct {
 		name         string
@@ -139,13 +118,14 @@ func TestDecideChecks(t *testing.T) {
 		wantSeverity float64
 	}{
 		{"one low-priority check", map[string]Probability{"answer_wrong": 0.2, "unsupported": 0.1, "missing_tools": 0.9},
-			nil, RuleAboveThreshold, []string{"missing_tools"}, 0.09},
+			nil, RuleAboveThreshold, []string{"missing_tools"}, 0.4},
 		{"flags in priority order", map[string]Probability{"answer_wrong": 0.5, "unsupported": 0.9, "missing_tools": 1},
-			nil, RuleAboveThreshold, []string{"answer_wrong", "unsupported", "missing_tools"}, 0.3 + 0.27 + 0.1},
+			nil, RuleAboveThreshold, []string{"answer_wrong", "unsupported", "missing_tools"}, 0.8},
 		{"below its own threshold", map[string]Probability{"answer_wrong": 0.2, "unsupported": 0.7, "missing_tools": 0.1},
-			[]float64{0.9}, RuleBelowThreshold, []string{}, 0},
-		{"random floor keeps with no flags", map[string]Probability{"answer_wrong": 0.2, "unsupported": 0.1, "missing_tools": 0.1},
-			[]float64{0.01}, RuleRandomFloor, []string{}, 0},
+			[]float64{0.9}, RuleBelowThreshold, []string{}, 1.0 / 3},
+		// missing_tools failed: the average is over the two that answered.
+		{"random floor keeps with no flags", map[string]Probability{"answer_wrong": 0.2, "unsupported": 0.1},
+			[]float64{0.01}, RuleRandomFloor, []string{}, 0.15},
 	}
 	for _, tt := range tests {
 		rnd, _ := fixed(t, tt.draw...)
@@ -159,7 +139,7 @@ func TestDecideChecks(t *testing.T) {
 	}
 
 	// With no checks, p_keep alone decides.
-	if d, flags := NewPolicy(testConfig, nil).DecideChecks(0.6, nil, nil); !d.Keep || d.Rule != RuleAboveThreshold || flags != nil {
+	if d, flags := NewPolicy(testConfig, nil).DecideChecks(0.6, nil, nil); !d.Keep || d.Rule != RuleAboveThreshold || flags != nil || d.Severity != 0.6 {
 		t.Errorf("no checks: %+v, flags %q", d, flags)
 	}
 }

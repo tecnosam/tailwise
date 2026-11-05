@@ -5,6 +5,7 @@
 seed: 0                  # every random choice: samples, baselines, tie breaks, jitter
 random_seeds: 100        # random-sampling baseline runs, for the mean and 95% interval
 budgets: [0.01, 0.05, 0.10, 0.20, 0.30, 0.50]   # review budgets: share of runs a team reviews
+review_budget: 0.05      # the headline: share of reviewed runs that failed when a team reviews this share
 # Production failure rates to translate precision to: the datasets fail far
 # more often (τ-bench ~40%, SWE-agent ~83%) than most production agents.
 reference_failure_rates: [0.02, 0.05, 0.10, 0.20]
@@ -22,6 +23,7 @@ tailwise:
   system_prompt: false           # Tailwise's scorer.system_prompt; the runs always carry their prompt
   evidence: grounded             # Tailwise's scorer.evidence: grounded (default) or first
   evidence_budget: 12000         # Tailwise's scorer.evidence_budget, for grounded
+  rules: ""                      # a folder of <dataset>.yaml heuristic rules (e.g. rules); checked on the cached answers
 
 cost:
   usd_per_million_input_tokens: 0.042   # Jev; output tokens are free

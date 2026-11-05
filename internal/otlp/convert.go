@@ -41,6 +41,8 @@ const (
 	inputMessageRoleFmt    = "llm.input_messages.%d.message.role"
 	inputMessageContentFmt = "llm.input_messages.%d.message.content"
 	inputMessagePartFmt    = "llm.input_messages.%d.message.contents.%d.message_content.text"
+	outputMessageRole      = "llm.output_messages.0.message.role"
+	outputMessageContent   = "llm.output_messages.0.message.content"
 )
 
 // Attributes an agent can set to say exactly what the model should see,
@@ -114,7 +116,10 @@ func Assemble(traceID string, payloads [][]byte) (trace.Trace, error) {
 
 // Assemble merges a trace's span batches into the record the model scores,
 // carrying the spans in its OTLP field. An empty output.value still scores:
-// the agent ran and gave up.
+// the agent ran and gave up. So does an AGENT root with no output.value at
+// all, as an empty answer: the run crashed or ran out of steps, which is a
+// failure worth review. Any other root needs one, which keeps ordinary
+// service spans out.
 func (a Assembler) Assemble(traceID string, payloads [][]byte) (trace.Trace, error) {
 	merged, spans, err := merge(payloads)
 	if err != nil {
@@ -129,7 +134,7 @@ func (a Assembler) Assemble(traceID string, payloads [][]byte) (trace.Trace, err
 		return trace.Trace{}, fmt.Errorf("%w: root span %q has no %s", ErrNotScorable, root.GetName(), attrInputValue)
 	}
 	output, answered := lookup(root, attrOutputValue)
-	if !answered {
+	if !answered && attr(root, attrSpanKind) != kindAgent {
 		return trace.Trace{}, fmt.Errorf("%w: root span %q has no %s", ErrNotScorable, root.GetName(), attrOutputValue)
 	}
 	answer := messageText(output, answerKeys)
@@ -137,15 +142,16 @@ func (a Assembler) Assemble(traceID string, payloads [][]byte) (trace.Trace, err
 		answer = ""
 	}
 
-	tools := spansOfKind(spans, kindTool)
+	calls := toolCallsOf(root, spans)
 	t := trace.Trace{
 		TraceID:      traceID,
 		Agent:        a.agentOf(root, resourceOf(merged, root)),
 		SystemPrompt: systemPrompt(root, spans),
 		Question:     question,
 		FinalAnswer:  answer,
-		ToolCalls:    toolCalls(tools),
-		Evidence:     evidence(root, spans, tools),
+		ToolCalls:    calls,
+		Evidence:     evidence(root, spans, calls),
+		Conversation: conversation(spans),
 	}
 	if t.OTLP, err = proto.Marshal(merged); err != nil {
 		return trace.Trace{}, fmt.Errorf("otlp: encode trace %s: %w", traceID, err)
@@ -257,18 +263,14 @@ func spansOfKind(spans []*tracepb.Span, kind string) []*tracepb.Span {
 	return out
 }
 
-func toolCalls(tools []*tracepb.Span) []trace.ToolCall {
-	var calls []trace.ToolCall
-	for _, s := range tools {
-		name := attr(s, attrToolName)
-		if name == "" {
-			name = s.GetName()
-		}
-		call := trace.ToolCall{Name: name, Args: toolArgs(s), Output: messageText(attr(s, attrOutputValue), outputKeys)}
-		call.Status, _ = json.Marshal(toolStatus(s))
-		calls = append(calls, call)
+func toolCall(s *tracepb.Span) trace.ToolCall {
+	name := attr(s, attrToolName)
+	if name == "" {
+		name = s.GetName()
 	}
-	return calls
+	call := trace.ToolCall{Name: name, Args: toolArgs(s), Output: messageText(attr(s, attrOutputValue), outputKeys)}
+	call.Status, _ = json.Marshal(toolStatus(s))
+	return call
 }
 
 // toolArgs is the span's input if it is JSON, else its declared parameters,
@@ -330,6 +332,39 @@ func systemPrompt(root *tracepb.Span, spans []*tracepb.Span) string {
 	return ""
 }
 
+// conversation is the user's and assistant's turns as the latest LLM call saw
+// them: the call with the longest history, its input messages and its reply.
+// System and tool messages are left out, and so are empty turns.
+func conversation(spans []*tracepb.Span) []trace.Message {
+	var last *tracepb.Span
+	most := 0
+	for _, s := range spansOfKind(spans, kindLLM) {
+		n := 0
+		for ; ; n++ {
+			if _, ok := lookup(s, fmt.Sprintf(inputMessageRoleFmt, n)); !ok {
+				break
+			}
+		}
+		if n > 0 && n >= most {
+			last, most = s, n
+		}
+	}
+	if last == nil {
+		return nil
+	}
+	var out []trace.Message
+	add := func(role, content string) {
+		if (role == "user" || role == "assistant") && strings.TrimSpace(content) != "" {
+			out = append(out, trace.Message{Role: role, Content: content})
+		}
+	}
+	for i := range most {
+		add(attr(last, fmt.Sprintf(inputMessageRoleFmt, i)), messageContent(last, i))
+	}
+	add(cmp.Or(attr(last, outputMessageRole), "assistant"), attr(last, outputMessageContent))
+	return out
+}
+
 func messageContent(s *tracepb.Span, i int) string {
 	if content, ok := lookup(s, fmt.Sprintf(inputMessageContentFmt, i)); ok {
 		return content
@@ -348,7 +383,7 @@ func messageContent(s *tracepb.Span, i int) string {
 // evidence comes from the most explicit source available: evidence attributes
 // on the root, then RETRIEVER documents, then paragraphs of successful tool
 // outputs.
-func evidence(root *tracepb.Span, spans, tools []*tracepb.Span) []string {
+func evidence(root *tracepb.Span, spans []*tracepb.Span, calls []trace.ToolCall) []string {
 	if explicit := indexed(root, AttrEvidenceFmt); len(explicit) > 0 {
 		return explicit
 	}
@@ -368,11 +403,11 @@ func evidence(root *tracepb.Span, spans, tools []*tracepb.Span) []string {
 	if len(out) > 0 {
 		return out
 	}
-	for _, s := range tools {
-		if toolStatus(s) != "ok" {
+	for _, c := range calls {
+		if c.StatusText() != "ok" {
 			continue
 		}
-		for _, paragraph := range strings.Split(messageText(attr(s, attrOutputValue), outputKeys), "\n\n") {
+		for _, paragraph := range strings.Split(c.Output, "\n\n") {
 			add(paragraph)
 		}
 	}
@@ -391,7 +426,7 @@ func indexed(s *tracepb.Span, format string) []string {
 }
 
 var (
-	questionKeys = []string{"question", "input", "query", "prompt", "text", "content"}
+	questionKeys = []string{"question", "input", "query", "prompt", "task", "text", "content"}
 	answerKeys   = []string{"final_answer", "answer", "output", "result", "response", "text", "content"}
 	outputKeys   = []string{"result", "output", "content", "text"}
 )

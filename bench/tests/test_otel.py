@@ -58,10 +58,15 @@ def test_tau_policy_is_sent_as_the_first_llm_calls_system_message():
     assert run.system_prompt.startswith("# Policy")
     req, state = run_trace(run)
     llm = [s for s in spans(req) if attrs(s)["openinference.span.kind"] == "LLM"]
-    assert len(llm) == 1
+    assert len(llm) == 2  # the first call, with the policy; the last, with the conversation
     a = attrs(llm[0])
     assert a["llm.input_messages.0.message.role"] == "system"
     assert a["llm.input_messages.0.message.content"] == run.system_prompt
+    last = attrs(llm[1])
+    assert last["llm.input_messages.0.message.role"] == "user"
+    # The run ends with the user's thanks: it is history, and there is no reply.
+    assert last[f"llm.input_messages.{len(run.messages) - 1}.message.content"] == "Thanks!"
+    assert "llm.output_messages.0.message.content" not in last
     assert state.startswith("SYSTEM PROMPT:\n# Policy\nOnly refund delivered orders.\n\nUSER QUESTION:")
 
 
@@ -94,7 +99,7 @@ def test_run_trace_is_one_agent_root_and_a_tool_span_per_call():
     t0, t1 = attrs(tools[0]), attrs(tools[1])
     assert t0["tool.name"] == "get_order" and json.loads(t0["input.value"]) == {"order_id": "#1"}
     assert "status" not in tools[0] and tools[1]["status"]["code"] == 2
-    assert len(root["traceId"]) == 32 and len({s["spanId"] for s in spans(req)}) == 4  # root, LLM, two tools
+    assert len(root["traceId"]) == 32 and len({s["spanId"] for s in spans(req)}) == 5  # root, two LLM, two tools
     assert "2. refund({\"order_id\": \"#1\"}) -> error" in state
     assert "FINAL ANSWER:\nYour refund is done." in state
 

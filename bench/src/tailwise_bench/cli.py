@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import analyze, report, source
+from . import analyze, report, rules, source
 from .budget import BudgetGuard
 from .cache import ScoreCache
 from .client import ScoringClient
@@ -81,6 +81,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         cfg = replace(cfg, tailwise=replace(cfg.tailwise, manifest=str(Path(args.manifest).resolve())))
     if args.evidence:
         cfg = replace(cfg, tailwise=replace(cfg.tailwise, evidence=args.evidence))
+    if args.rules:
+        cfg = replace(cfg, tailwise=replace(cfg.tailwise, rules=str(Path(args.rules).resolve())))
     if args.budget is not None:
         cfg = replace(cfg, cost=replace(cfg.cost, budget_usd=args.budget))
     names = [d.strip() for d in args.datasets.split(",") if d.strip()]
@@ -133,7 +135,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         if res.errors:
             report.write_json(out / "errors.json", [{"trace_id": k, "error": v} for k, v in res.errors.items()])
         questions = sorted({q for r in res.results.values() for q in (r.get("answers") or {})})
-        rows = analyze.rows(runs, res.results, res.errors, cfg, questions)
+        verdicts = None
+        if cfg.tailwise.rules:
+            rule_files = rules.files(cfg.resolve(cfg.tailwise.rules), names)
+            meta["rules"] = {ds: {"file": str(rule_files[ds]), "sha256": h} for ds, h in rules.digest(rule_files).items()}
+            verdicts = rules.check(runs, rule_files, cfg.base.parent)
+        rows = analyze.rows(runs, res.results, res.errors, cfg, questions, verdicts)
+        if verdicts is not None:
+            # A keep rule decides without Jev, so with the rules those runs cost nothing.
+            meta["tokens_with_rules"] = sum(r["tokens"] for r in rows)
         summary = analyze.summary(rows, cfg)
         report.write_csv(out / "runs.csv", rows)
         report.write_json(out / "summary.json", {"meta": meta, **summary})
@@ -202,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--manifest", help="score with this manifest instead of tailwise.manifest (a labelled variant)")
     r.add_argument("--budget", type=float, help="hard spending cap in dollars for this run (cost.budget_usd)")
     r.add_argument("--evidence", choices=["first", "grounded"], help="Tailwise's scorer.evidence for this run")
+    r.add_argument("--rules", help="a folder of <dataset>.yaml heuristic rules, checked on the cached answers (no cost)")
     r.add_argument("--baseline", help="an earlier results folder: the report compares this run with it")
     r.add_argument("--notes", help="a Markdown file: what changed since the baseline, added to the report")
     inv = sub.add_parser("investigate", help="the offline τ-bench diagnosis: what Jev sees, grounding, gold actions")

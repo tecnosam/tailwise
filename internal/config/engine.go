@@ -134,7 +134,7 @@ func (f File) engine(sec secrets, manifests map[string]*Manifest) *Engine {
 }
 
 func model(s Scorer, apiKey string, m *Manifest) scorer.ModelConfig {
-	return scorer.ModelConfig{
+	mc := scorer.ModelConfig{
 		Client: scorer.Config{
 			Endpoint:         s.Endpoint,
 			Model:            s.Model,
@@ -151,7 +151,13 @@ func model(s Scorer, apiKey string, m *Manifest) scorer.ModelConfig {
 		SystemPrompt:   s.SystemPrompt,
 		Evidence:       s.Evidence,
 		EvidenceBudget: s.EvidenceBudget,
+		Actions:        m.actions(),
 	}
+	// A nil *rules.Set would be a non-nil pipeline.Rules.
+	if m.ruleSet != nil {
+		mc.Rules = m.ruleSet
+	}
+	return mc
 }
 
 func reasonQuestion(s Scorer, m *Manifest) string {

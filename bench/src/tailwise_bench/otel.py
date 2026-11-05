@@ -3,8 +3,9 @@
 A run becomes the spans an OpenInference-instrumented agent emits for the
 parts Tailwise reads: an AGENT root span with the question as input.value and
 the final answer as output.value, an LLM span whose system message is the
-agent's system prompt, and a TOOL span per tool call with its arguments,
-output and status. TRAIL runs are sent as their own spans.
+agent's system prompt, a TOOL span per tool call with its arguments, output
+and status, and, when the run has its turns, a last LLM span holding the
+conversation. TRAIL runs are sent as their own spans.
 """
 
 from __future__ import annotations
@@ -90,6 +91,24 @@ def run_trace(run: Run) -> tuple[dict[str, Any], str]:
         if c.error:
             span["status"] = {"code": 2, "message": "tool error"}
         spans.append(span)
+    if run.messages:
+        # The agent's last LLM call, where Tailwise reads the conversation: the
+        # turns before its reply as input, and the reply (the agent's last turn,
+        # when the conversation ends with one) as output.
+        history, reply = run.messages, ""
+        if history[-1][0] == "assistant":
+            history, reply = history[:-1], history[-1][1]
+        start = 2000 + 10_000 * len(run.tool_calls)
+        a = [attr("openinference.span.kind", "LLM")]
+        for i, (role, text) in enumerate(history):
+            a += [attr(f"llm.input_messages.{i}.message.role", role),
+                  attr(f"llm.input_messages.{i}.message.content", text)]
+        if reply:
+            a += [attr("llm.output_messages.0.message.role", "assistant"),
+                  attr("llm.output_messages.0.message.content", reply)]
+        spans.append({"traceId": run.trace_id, "spanId": hex_id("llm-last", run.trace_id, size=8),
+                      "parentSpanId": root_id, "name": "llm", "startTimeUnixNano": str(start),
+                      "endTimeUnixNano": str(start + 5000), "attributes": a})
     return request(spans), estimate_state(spans)
 
 

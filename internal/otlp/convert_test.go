@@ -299,6 +299,8 @@ func TestAssembleQuestionAndAnswerFromJSON(t *testing.T) {
 		{"plain question", "plain answer", "plain question", "plain answer"},
 		{`{"question": "What?"}`, `{"answer": "This."}`, "What?", "This."},
 		{`{"input": "What?", "session": 3}`, `{"output": "This."}`, "What?", "This."},
+		// smolagents records a run's input as {"task": ...}.
+		{`{"task": "What?", "additional_args": {}}`, `"This."`, "What?", "This."},
 		{`"quoted question"`, `"quoted answer"`, "quoted question", "quoted answer"},
 		// JSON without a recognised key is passed through whole.
 		{`{"messages": []}`, `{"choices": []}`, `{"messages": []}`, `{"choices": []}`},
@@ -353,6 +355,18 @@ func TestAssembleADKInvocation(t *testing.T) {
 	}
 }
 
+// An agent run that ended without an answer (it crashed, or ran out of
+// steps) is scored with an empty one.
+func TestAssembleAgentWithoutAnswer(t *testing.T) {
+	got, err := assemble(t, []*tracepb.Span{span(1, 0, "CodeAgent.run", 100, attrSpanKind, kindAgent, attrInputValue, "q")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Question != "q" || got.FinalAnswer != "" {
+		t.Errorf("question = %q, final answer = %q", got.Question, got.FinalAnswer)
+	}
+}
+
 func TestAssembleNotScorable(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -360,7 +374,7 @@ func TestAssembleNotScorable(t *testing.T) {
 		wantErr string
 	}{
 		{"no question", []*tracepb.Span{span(1, 0, "GET /users", 100, "http.method", "GET")}, "has no input.value"},
-		{"no answer", []*tracepb.Span{span(1, 0, "run", 100, attrSpanKind, kindAgent, attrInputValue, "q")}, "has no output.value"},
+		{"no answer", []*tracepb.Span{span(1, 0, "run", 100, attrSpanKind, kindChain, attrInputValue, "q")}, "has no output.value"},
 		// Only children arrived: the best available root is a tool span.
 		{"root span missing", []*tracepb.Span{span(2, 1, "search", 100, attrSpanKind, kindTool, attrInputValue, `{"q": 1}`)}, "has no output.value"},
 	}

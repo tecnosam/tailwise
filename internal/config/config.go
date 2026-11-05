@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/tecnosam/tailwise/internal/rules"
 	"github.com/tecnosam/tailwise/internal/trace"
 )
 
@@ -42,6 +43,9 @@ type File struct {
 	Agents    Agents     `yaml:"agents"`
 	Policy    Policy     `yaml:"policy"`
 	Exporters []Exporter `yaml:"exporters"`
+	// Rules are the heuristic rules every agent gets; a manifest adds its own
+	// and overrides these by name.
+	Rules []rules.Config `yaml:"rules"`
 
 	Observability Observability `yaml:"observability"`
 }
@@ -189,8 +193,16 @@ type Manifest struct {
 	// Decision, when set, lists more questions that decide; it stays in the
 	// engine and is not sent to the model.
 	Decision *ManifestDecision `json:"decision"`
+	// Actions maps each tool that acts for the user to what it does, worded
+	// as a request ("cancel a pending order"). It turns on the action checks.
+	Actions map[string]string `json:"actions"`
+	// Rules are this agent's heuristic rules, on top of the config's.
+	Rules []rules.Config `json:"rules"`
 
 	Reasons map[string]string `json:"-"`
+	// ruleSet is the config's rules merged with Rules, compiled; nil when
+	// there are none.
+	ruleSet *rules.Set
 }
 
 // ManifestDecision lists the yes/no questions that decide besides the

@@ -40,7 +40,8 @@ uv run bench run --config path/to/config.yaml   # another config
 ```
 
 Per-run overrides: `--manifest manifests/answer-wrong-only.json` (other
-questions), `--evidence first` (Tailwise's older evidence strategy; `grounded`
+questions; `manifests/tau-actions.json` adds τ-bench's action tools, for the
+action checks), `--evidence first` (Tailwise's older evidence strategy; `grounded`
 is the default),
 `--budget 1.00` (a hard cap for this run), and `--baseline <folder>` with
 `--notes <file>` to add a before/after comparison to the report.
@@ -60,6 +61,195 @@ and 2 for bad arguments.
 
 `uv run pytest` runs the unit tests, and `uv run mypy src` type-checks the
 code. Neither needs the network.
+
+## Results
+
+The headline is the share of reviewed runs that failed: a team reviews the
+5% of runs Tailwise ranks highest, and asks how many of them are real
+failures. That is what a review queue gets; ROC-AUC and the threshold
+metrics below are diagnostics. The datasets fail far more often than
+production agents, so the columns after the first drop failed runs at random
+until 20%, 10% or 5% of runs fail (100 draws, mean). Each draw also
+resamples the tasks, since the datasets run each task several times, so the
+intervals cover which tasks a dataset happened to contain. Random review
+finds failures at the failure rate; a perfect ranker finds 100% in each
+column.
+
+Jev `jev-1.14.0`. Runs are ranked by `severity`, the deciding questions'
+average answer. The bold rows and the other `grounded` rows were scored
+2026-11-05 on the current code (`results/20261105T121615Z_…` and
+`20261105T121625Z_…`); the `first` and held-out rows on 2026-11-04. The
+folders under `results/` hold every table.
+
+| Dataset | Runs (failed) | Questions, evidence | Own rate | 20% failing | 10% failing | 5% failing | ROC-AUC | Cost per 1,000 runs |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| τ-bench | 1,980 (40%) | built-in, `first` | 51% | 27% | 13% | 7% | 0.586 | $0.08 |
+| | | built-in, `grounded` | 66% | 40% | 22% | 12% | 0.645 | $0.14 |
+| | | + action checks³ | **67%** | **42%** | **23%** | **12%** | **0.668** | $0.36 |
+| τ-bench, trace-detectable runs | 1,304 (42%) | built-in, `first` | 61% | 33% | 19% | 10% | 0.629 | $0.08 |
+| | | built-in, `grounded` | 74% | 49% | 30% | 18% | 0.708 | $0.13 |
+| | | + action checks³ | **92%** | **74%** | **47%** | **27%** | **0.732** | $0.33 |
+| | | + action checks, ranked by `p_keep`⁴ | 71% | 41% | 23% | 14% | 0.706 | $0.33 |
+| SWE-agent | 1,000 (77%) | built-in, `first`¹ | 100% | 59%† | 36%† | 22%† | 0.832 | $0.12 |
+| | | built-in, `grounded` | 100% | 78%† | 52%† | 32%† | 0.856 | $0.25 |
+| SWE-agent, held out | 1,000 (84%) | built-in, `first` | 100% | 60%† | 36%† | 18%† | 0.786 | $0.14 |
+| | | built-in, `grounded` | 98% | 67%† | 41%† | 21%† | 0.801 | $0.27 |
+| TRAIL (GAIA and SWE-bench) | 148 (74%) | built-in, `first` | 100% | 55%† | 28%† | 12%† | 0.631 | $0.12 |
+| | | built-in, `grounded` | 100% | 53%† | 31%† | 17%† | 0.673 | $0.15 |
+
+† Rough: these datasets have few successful runs (227, 160 and 38), so at
+these rates a 5% review is 3 to 15 runs per draw. On τ-bench it is 33 to 141.
+
+The intervals are wide everywhere. At 10% failing (95% intervals):
+τ-bench trace-detectable with action checks 47% (26–66%), the same runs with
+`answer_wrong` alone 30% (17–49%), all τ-bench runs with action checks 23%
+(14–34%), SWE-agent 52% (24–83%), and TRAIL 31% (0–100%).
+
+³ With `manifests/tau-actions.json`: the built-in questions plus τ-bench's
+13 action tools, which turn on the [action checks](../README.md#checking-an-agents-actions).
+Of failed runs on gold-consistent tasks, they keep wrong-variant exchanges
+the user had described 90% of the time (33% without), other wrong arguments
+73% (58%), extra actions 68% (57%), and runs that left out an action 68%
+(50%).
+
+⁴ The same answers, ranked by the highest deciding answer, as Tailwise did
+before `severity` became the average. Ranked that way, the action checks
+made the review queue *worse* than `answer_wrong` alone (23% against 30% at
+10% failing): one confident check, usually `action_wrong`, put a third
+successful runs at the top. Averaging puts first the runs several checks
+doubt.
+
+**Against `answer_wrong` alone**, on the same resampled runs (points of
+reviewed runs that failed, 95% interval):
+
+| τ-bench, with action checks | 20% failing | 10% failing | 5% failing |
+| --- | --- | --- | --- |
+| Trace-detectable runs | +24 (+5 to +40) | +17 (−1 to +35) | +9 (−2 to +23) |
+| All runs | 0 (−15 to +13) | 0 (−11 to +9) | +1 (−9 to +10) |
+
+The gain is shown at 20% failing on trace-detectable runs and likely at
+10%; at lower rates and on all runs it is not shown. The action checks and
+the averaging were designed on τ-bench, so these are in-sample until
+confirmed on data they were not built on.
+
+With the built-in questions, `answer_wrong` is the only deciding question,
+so `severity` is its answer. The `first` and held-out rows predate
+`severity` and were rebuilt from each run's `runs.csv` (folders named
+`rebuilt-from-…`), not re-scored.
+
+### Cost: random review against Tailwise
+
+Per 10,000 traces with 10% failing, a team reviewing 500 of them (5%).
+Random review costs nothing to choose the traces and finds 50 failures;
+Tailwise pays Jev to score every trace ($0.042 per million input tokens,
+output free). Built-in questions with `grounded` evidence, and the action
+checks for τ-bench:
+
+| Dataset | Jev cost | Failures found: random → Tailwise | Reviews per failure found | Random reviews for the same failures | Jev cost per extra failure found |
+| --- | --- | --- | --- | --- | --- |
+| τ-bench, trace-detectable, action checks | $3.32 | 50 → 237 | 10 → 2.1 | 2,366 | $0.018 |
+| τ-bench, all runs, action checks | $3.58 | 50 → 115 | 10 → 4.3 | 1,150 | $0.055 |
+| τ-bench, trace-detectable, built-in | $1.31 | 50 → 152 | 10 → 3.3 | 1,522 | $0.013 |
+| SWE-agent† | $2.50 | 50 → 258 | 10 → 1.9 | 2,579 | $0.012 |
+| SWE-agent† with the `no_submit` keep rule | $1.43 | 50 → 280 | 10 → 1.8 | 2,796 | $0.006 |
+| TRAIL† | $1.54 | 50 → 156 | 10 → 3.2 | 1,558 | $0.015 |
+
+Scoring costs cents per 10,000 traces; reviewer time is the real cost, and
+Tailwise cuts the reviews needed per failure found by 2.3× to 5×. Every
+report has this table (`## Cost`), from that run's own token counts. These
+traces are 1,300 to 5,300 input tokens each; longer traces cost
+proportionally more.
+
+### Heuristic rules
+
+`bench run --rules rules` adds the [heuristic rules](../README.md#heuristic-rules)
+in `rules/<dataset>.yaml`, written from what each agent does before looking
+at any result, and never tuned on the labels. Rules do not change what Jev is
+asked, so `rulecheck` (Tailwise's own rule and span code) checks each run's
+request and the harness combines the verdicts with the cached answers as the
+engine does: a rule set costs nothing to measure, and is compared with Jev
+alone on the very same answers. Scored 2026-11-05
+(`results/20261105T121633Z_…`, `20261105T121649Z_…`), 10% failing:
+
+| Dataset | Jev alone | Jev + rules | Gain (95% interval) | Rules alone |
+| --- | --- | --- | --- | --- |
+| τ-bench, with action checks | 23% | 19% | −4 (−11 to +4) | 12% |
+| τ-bench trace-detectable, with action checks | 47% | 42% | −5 (−21 to +15) | 14% |
+| SWE-agent | 52%† | 56%† | +4 (−35 to +43) | 55%† |
+| TRAIL | 31%† | 24%† | −7 (−67 to +50) | 18%† |
+
+| Dataset | Rule | Fired on failed | Fired on successful | Fired runs that failed |
+| --- | --- | --- | --- | --- |
+| SWE-agent | `no_submit` (keep) | 40% | 4% | 97% |
+| τ-bench | `tool_failed` (signal) | 34% | 30% | 43% |
+| τ-bench | `looping` (signal) | 2% | 0% | 75% |
+| TRAIL | `code_failed` (signal) | 18% | 32% | 62% |
+| TRAIL | `looping` (signal) | 11% | 5% | 86% |
+| TRAIL | `no_answer` (keep) | 5% | 0% | 100% |
+
+- **A tool error is not a failure signal.** Agents recover from them:
+  `tool_failed` fires about as often on successful τ-bench runs as on failed
+  ones, and TRAIL's `code_failed` more often on successful ones. As signal
+  rules weighing as much as a check, they pulled good runs up the queue.
+- **"Certain" needs checking.** SWE-agent's `no_submit` is right 97% of the
+  time, not always: 4% of successful runs never call `submit` (the harness
+  can submit for the agent when it runs out of budget). It decides 32% of
+  SWE-agent runs without Jev, saving a fifth of the three-dataset run's tokens.
+- None of the gains is shown. Rules earn their place by saving cost on
+  certain failures, or as signals only once measured on the agent's own
+  labelled runs.
+
+### At the threshold
+
+The keep decision itself, at 0.5: the share of successful runs kept, and of
+failures caught. A team that reviews a fixed share by `severity` does not
+depend on these.
+
+| Dataset | Questions, evidence | Successes kept | Failures caught |
+| --- | --- | --- | --- |
+| τ-bench | built-in, `first` | 57% | 69% |
+| | built-in, `grounded` | 33% | 52% |
+| | + action checks³ | 50% | 72% |
+| τ-bench, trace-detectable runs | built-in, `first` | 50% | 68% |
+| | built-in, `grounded` | 25% | 54% |
+| | + action checks³ | 40% | 70% |
+| SWE-agent | built-in, `first`¹ | 30% | 82% |
+| | built-in, `grounded` | 33% | 90% |
+| SWE-agent, held out | built-in, `first` | 42% | 82% |
+| | built-in, `grounded` | 46% | 86% |
+| TRAIL | built-in, `first` | 68% | 86% |
+| | built-in, `grounded` | 68% | 84% |
+
+¹ Scored before the trimming and tool-status fixes, with
+`manifests/answer-wrong-only.json` (the same deciding question): 3 runs were
+unscorable.
+
+TRAIL's runs are smolagents agents. Before Tailwise read their code steps
+(each "Step" span whose model wrote code, as an `execute_code` call) and
+scored runs that ended without an answer, TRAIL's SWE-bench runs ranked
+below random (ROC-AUC 0.33): Tailwise saw only the task and the final
+answer, and dropped the 5 runs that crashed, all of them failures. With
+both, it is 0.67 (95% interval for the gain: +0.05 to +0.62), and no run is
+unscorable.
+
+**Reading them:**
+
+- **Tailwise beats random review clearly.** With the action checks, a team
+  reviewing 5% of τ-bench runs finds a real failure in about half its reviews
+  when 10% of runs fail (47%, 95% interval 26–66%, against 10% at random),
+  and in a quarter when 5% fail.
+- **How checks are combined matters as much as which checks run.** Ranked by
+  the highest answer, the action checks lowered the review queue's yield
+  (30% to 23%); averaged, they raise it to 47%. That gain over `answer_wrong`
+  alone is likely but not yet shown at 10% failing (interval −1 to +35
+  points), and it is in-sample.
+- **On all τ-bench runs there is no gain** (23% either way): a third of its
+  labels rest on things no trace shows, which caps any trace-based ranking.
+- `grounded` evidence improves the queue on every dataset. It costs about
+  twice as much.
+- TRAIL's label is "has a HIGH-impact error", not "failed the task", so it
+  is noisier than the other two. Its figures are a final check, never a
+  target: its terms forbid tuning on it.
 
 ## What Tailwise sees
 
@@ -88,10 +278,29 @@ SWE-agent) gets the metrics below. Two decision rules come from the same
 call:
 
 - **Tailwise (default):** the built-in questions and decision rule as
-  shipped. A run is kept when any check reaches the threshold (0.5), and its
-  score is `p_keep`.
+  shipped. A run is kept when any check reaches the threshold (0.5), and it
+  is ranked by `severity`, the deciding questions' average answer.
 - **answer_wrong only:** the decision question alone, read from the recorded
   answers.
+
+A third row ranks Tailwise's answers by `p_keep`, the highest deciding
+answer, to show what averaging adds; it is left out where it ranks the same.
+
+**The headline: reviewed runs that failed.** A team reviews the
+`review_budget` share of runs (5%) that Tailwise ranks highest. The report
+gives the share of those that failed at the dataset's own failure rate, and
+at each production rate in `reference_failure_rates` (20, 10, 5 and 2%). For
+a production rate, failed runs (or, above the dataset's rate, successful
+ones) are dropped at random until that share fails, 100 times; the report
+gives the mean, its 95% interval in `summary.json`, and marks a cell † when
+fewer than 20 runs are reviewed per draw. Ties in score are broken at random.
+Random review finds failures at the failure rate; a perfect ranker finds
+them in every reviewed run, or failure rate ÷ budget when failures are fewer
+than the budget.
+
+`severity` is computed from the recorded answers, as Tailwise computes it,
+so changing how answers combine needs no re-scoring. For each run scored
+fresh, the harness checks it against the `severity` Tailwise returned.
 
 **At the threshold** (no random floor):
 
@@ -112,7 +321,8 @@ call:
   same number of random runs, averaged over 100 seeded runs and shown with
   its 95% interval. The curve also shows the best a perfect ranker could do.
 - **ROC-AUC and PR-AUC.**
-- **Calibration:** whether `p_keep` behaves like a probability of failure,
+- **Calibration:** whether `p_keep` (not `severity`, an average) behaves
+  like a probability of failure,
   shown as a reliability diagram with its ECE.
 
 **Trace-detectable runs (τ-bench).** Some τ-bench labels can't be judged

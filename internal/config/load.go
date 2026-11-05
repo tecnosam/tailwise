@@ -11,6 +11,8 @@ import (
 	"slices"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/tecnosam/tailwise/internal/rules"
 )
 
 // Load reads the YAML file at path and builds the engine's settings with the
@@ -87,6 +89,7 @@ func Build(f File, dir string, getenv func(string) string) (*Engine, error) {
 
 func (f File) clone() File {
 	f.Exporters = append([]Exporter(nil), f.Exporters...)
+	f.Rules = append([]rules.Config(nil), f.Rules...)
 	f.Agents.Models = maps.Clone(f.Agents.Models)
 	return f
 }
@@ -224,6 +227,9 @@ func loadManifests(f File) (map[string]*Manifest, []string, error) {
 			warnings = append(warnings, fmt.Sprintf("%s's manifest has no %q question, so decisions say only how "+
 				"likely the answer is wrong, not why. Add the choice question, or set %s.reason_question to \"\".",
 				key, s.ReasonQuestion, key))
+		}
+		if m.ruleSet, err = rules.New(rules.Merge(f.Rules, m.Rules)); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
 		}
 		out[agent] = m
 		return nil

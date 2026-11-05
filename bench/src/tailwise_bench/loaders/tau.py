@@ -10,7 +10,8 @@ Each trajectory is OpenAI-style messages: system (the policy), user,
 assistant (text or tool_calls), tool (a call's result, "Error: ..." when it
 failed). Tailwise sees the policy as the system prompt, the user's messages
 as the question, every tool call with its result, and the agent's last
-message as the final answer.
+message as the final answer. The user's and agent's turns go on the agent's
+last LLM call, as its history and reply.
 """
 
 from __future__ import annotations
@@ -92,6 +93,7 @@ def parse(file: str, row: dict[str, Any]) -> Run:
     results = pair_results(msgs)
 
     user_turns: list[str] = []
+    turns: list[tuple[str, str]] = []
     calls: list[ToolCall] = []
     final = ""
     system = next((m.get("content") or "" for m in msgs if m.get("role") == "system"), "")
@@ -101,9 +103,11 @@ def parse(file: str, row: dict[str, Any]) -> Run:
             text = content.replace(STOP, "").strip()
             if text:
                 user_turns.append(text)
+                turns.append(("user", text))
         elif role == "assistant":
             if content.strip():
                 final = content
+                turns.append(("assistant", content))
             for tc in m.get("tool_calls") or []:
                 fn = tc.get("function") or {}
                 args: Any = fn.get("arguments") or {}
@@ -118,7 +122,7 @@ def parse(file: str, row: dict[str, Any]) -> Run:
     return Run(
         dataset="tau", subset=f"{domain}/{model}", run_id=run_id, trace_id=hex_id("tau", run_id),
         failed=float(row["reward"]) < 1, system_prompt=system, question="\n\n".join(user_turns),
-        tool_calls=calls, final_answer=final,
+        tool_calls=calls, final_answer=final, messages=turns,
         meta={"domain": domain, "model": model, "task_id": row["task_id"], "trial": row.get("trial", 0),
               "reward": row["reward"]},
     )

@@ -51,6 +51,7 @@ func TestDecodeErrors(t *testing.T) {
 		{"wrong type", `{"question": 5, "final_answer": "a"}`, "invalid JSON"},
 		{"evidence not strings", `{"question": "q", "final_answer": "a", "evidence": [1]}`, "invalid JSON"},
 		{"tool call without name", `{"question": "q", "final_answer": "a", "tool_calls": [{"args": "x"}]}`, "tool_calls[0].name is required"},
+		{"conversation turn with another role", `{"question": "q", "final_answer": "a", "conversation": [{"role": "tool", "content": "x"}]}`, "conversation[0].role must be user or assistant"},
 		{"trailing data", `{"question": "q", "final_answer": "a"} {}`, "unexpected data"},
 		{"array", `[]`, "invalid JSON"},
 		{"agent too long", `{"question": "q", "final_answer": "a", "agent": "` + strings.Repeat("x", MaxAgentLength+1) + `"}`, "agent is longer than 128 bytes"},

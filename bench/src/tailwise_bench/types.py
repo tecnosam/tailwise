@@ -27,6 +27,9 @@ class Run:
     question: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     final_answer: str = ""
+    # The user's and agent's turns, (role, text), when the dataset has them:
+    # sent as the history of the agent's last LLM call.
+    messages: list[tuple[str, str]] = field(default_factory=list)
     agent: str = ""
     # TRAIL only: the run's own spans as OTLP/JSON, sent instead of building them.
     otlp_spans: list[dict[str, Any]] | None = None

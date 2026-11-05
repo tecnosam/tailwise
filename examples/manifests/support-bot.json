@@ -1,6 +1,6 @@
 {
   "model": "jev-latest",
-  "note": "A manifest for support-bot: the questions it is asked. answer_wrong decides keep or drop, and why_wrong picks the plain-English reason.",
+  "note": "A manifest for support-bot: the questions it is asked. answer_wrong decides keep or drop, and why_wrong picks the plain-English reason. Its actions turn on the action checks: each call to one of these tools is checked against what the user asked for, and each run for requests of these kinds left unhandled.",
   "questions": {
     "answer_wrong": {
       "type": "noul",
@@ -19,5 +19,10 @@
         "no_answer": "The agent did not give an answer."
       }
     }
+  },
+  "actions": {
+    "cancel_order": "cancel an order",
+    "issue_refund": "get a refund for an order",
+    "update_shipping_address": "change the shipping address of an order"
   }
 }
