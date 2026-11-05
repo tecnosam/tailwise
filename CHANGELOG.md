@@ -6,6 +6,14 @@ All notable changes to Tailwise are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-05
+
+Ranks traces for review, checks heuristic rules for free, and reads
+code-writing agents. Benchmarked on τ-bench, SWE-agent and TRAIL: per 10,000
+traces with 10% failing, a team reviewing 500 finds 110 to 258 failures where
+random review finds 50, for $1.31 to $3.58 of Jev calls (figures in
+`bench/published/benchmark.json`).
+
 ### Changed
 
 - `scorer.evidence` defaults to `grounded`: the model sees each tool call's
@@ -23,13 +31,21 @@ All notable changes to Tailwise are recorded here. The format follows
   check is sure of. On τ-bench with the action checks (trace-detectable
   runs), when 10% of runs fail and a team reviews the top 5%, the share of
   reviewed traces that are failures rises from 23% (ranked by `p_keep`) to
-  47% (95% interval 26–66%). The benchmark's headline metric is now that share. The response's `severity` is `null` on
-  fallback rather than omitted. Rank-order priority weights are gone. A check
+  47% (95% interval 26–66%). The benchmark's headline metric is now that
+  share. The response's `severity` is `null` on fallback rather than omitted. Rank-order priority weights are gone. A check
   that failed is left out of the average rather than counted as 0, so a
   scorer outage does not bury failed traces; `action_wrong` on a trace without
   actions is 0.
 
 ### Added
+
+- `bench publish` writes `bench/published/benchmark.json`, the figures the
+  website shows: failures found per 500 reviews against random review, the
+  Jev cost per 10,000 traces, and their 95% intervals. The benchmark reports
+  gain a cost section comparing random review with Tailwise, and each run's
+  review figures resample whole tasks, so the intervals hold for tasks the
+  benchmark did not see. Rules run over the exact requests through
+  `bench/rulecheck`, at no cost.
 
 - Heuristic rules: free, certain checks that need no model, in the config
   (every agent) and in a manifest (one agent; same-name rules override,

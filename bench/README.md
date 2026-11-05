@@ -59,6 +59,19 @@ read. Use it to confirm a change designed on the main datasets:
 The exit status is 0 on success, 3 when the run stopped at the budget cap,
 and 2 for bad arguments.
 
+`uv run bench publish <results folders>` writes `published/benchmark.json`,
+the figures the website shows: one row per dataset, slice (all runs or the
+trace-detectable ones) and setup (built-in questions or a manifest, with or
+without rules), at the cost section's deployment of 10,000 traces, 10%
+failing and 500 reviews. It reads only `summary.json`, so it is free. The
+website reads the file at the latest release's tag, so publish it from the
+runs a release's figures come from before tagging:
+
+```sh
+uv run bench publish results/<built-in> results/<tau-actions> \
+  results/<built-in+rules> results/<tau-actions+rules>
+```
+
 `uv run pytest` runs the unit tests, and `uv run mypy src` type-checks the
 code. Neither needs the network.
 
@@ -399,6 +412,10 @@ Each run writes `results/<UTC timestamp>_<git sha>/`:
 | `report.md` | A summary of the results, the main tables and the plots |
 | `tailwise.yaml`, `tailwise.log` | The config Tailwise ran with and its log |
 | `errors.json` | Runs that could not be scored, if any |
+
+`results/` is not committed. `published/benchmark.json` is: the figures of the
+latest published runs, with the `run` folder each row came from and the
+`source` commit.
 
 Every results folder also holds `source.patch`, the uncommitted changes the
 run used. `summary.json` records the base commit and the patch's SHA-256

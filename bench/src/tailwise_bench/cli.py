@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import analyze, report, rules, source
+from . import analyze, publish, report, rules, source
 from .budget import BudgetGuard
 from .cache import ScoreCache
 from .client import ScoringClient
@@ -201,6 +201,12 @@ def cmd_investigate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_publish(args: argparse.Namespace) -> int:
+    data = publish.write([Path(r) for r in args.runs], Path(args.out))
+    print(f"Wrote {args.out}: {len(data['results'])} results")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="bench", description="Benchmark how well Tailwise picks failed agent runs.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -234,8 +240,11 @@ def main(argv: list[str] | None = None) -> int:
     inv.add_argument("--control", type=int, default=200, help="with --completeness-check: successful runs sampled")
     inv.add_argument("--dry-run", action="store_true", help="with an experiment: count and project cost, no calls")
     inv.add_argument("--config", default=str(DEFAULT_CONFIG))
+    pub = sub.add_parser("publish", help="write the website's figures from results folders")
+    pub.add_argument("runs", nargs="+", help="results folders: built-in, manifest and +rules runs")
+    pub.add_argument("--out", default=str(DEFAULT_CONFIG.parent / "published" / "benchmark.json"))
     args = p.parse_args(argv)
-    return cmd_investigate(args) if args.cmd == "investigate" else cmd_run(args)
+    return {"investigate": cmd_investigate, "publish": cmd_publish}.get(args.cmd, cmd_run)(args)
 
 
 if __name__ == "__main__":
