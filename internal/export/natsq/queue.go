@@ -129,6 +129,14 @@ type recordMessage struct {
 
 	Answers map[string]pipeline.Probability `json:"answers,omitempty"`
 	Flags   []string                        `json:"flags,omitempty"`
+	Rules   []ruleMessage                   `json:"rules,omitempty"`
+}
+
+// ruleMessage is a rule that fired.
+type ruleMessage struct {
+	Name   string `json:"name"`
+	Keep   bool   `json:"keep,omitempty"`
+	Reason string `json:"reason"`
 }
 
 // A trace too big for the server keeps its decision but loses its original
@@ -139,6 +147,9 @@ func encodeRecord(rec pipeline.Record, maxPayload int) ([]byte, error) {
 		Trace: rec.Trace, Agent: string(rec.Agent), Keep: d.Keep, Scored: d.Scored, PKeep: float64(d.PKeep),
 		Rule: string(d.Rule), Reason: d.Reason, Cause: d.Cause, Severity: d.Severity, Model: string(rec.Model), LatencyNS: int64(rec.Latency),
 		Answers: rec.Answers, Flags: rec.Flags,
+	}
+	for _, r := range rec.Rules {
+		m.Rules = append(m.Rules, ruleMessage{Name: r.Name, Keep: r.Keep, Reason: r.Reason})
 	}
 	data, err := json.Marshal(m)
 	if err != nil || maxPayload <= 0 || len(data) <= maxPayload || len(m.Trace.OTLP) == 0 {
@@ -153,6 +164,10 @@ func decodeRecord(data []byte) (pipeline.Record, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return pipeline.Record{}, err
 	}
+	var fired []pipeline.RuleResult
+	for _, r := range m.Rules {
+		fired = append(fired, pipeline.RuleResult{Name: r.Name, Keep: r.Keep, Fired: true, Reason: r.Reason})
+	}
 	return pipeline.Record{
 		Trace: m.Trace,
 		Agent: pipeline.AgentLabel(m.Agent),
@@ -164,5 +179,6 @@ func decodeRecord(data []byte) (pipeline.Record, error) {
 		Latency: time.Duration(m.LatencyNS),
 		Answers: m.Answers,
 		Flags:   m.Flags,
+		Rules:   fired,
 	}, nil
 }

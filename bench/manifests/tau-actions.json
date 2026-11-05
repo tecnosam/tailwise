@@ -1,0 +1,58 @@
+{
+  "model": "tau-bench",
+  "note": "The built-in questions plus τ-bench's actions (retail and airline), for the action checks: each call to one of these tools is checked against the user's request, and each run is checked for requests of these kinds left unhandled. Descriptions are worded as the user would ask.",
+  "questions": {
+    "answer_wrong": {
+      "type": "noul",
+      "instructions": "Is the final answer wrong or only partially correct for the user's question?"
+    },
+    "unsupported_answer": {
+      "type": "noul",
+      "instructions": "Does the final answer make claims that the evidence the agent gathered does not support?"
+    },
+    "missing_tool_calls": {
+      "type": "noul",
+      "instructions": "Did the agent leave out tool calls the task needed, so it answered without information it should have looked up?"
+    },
+    "answered_on_failure": {
+      "type": "noul",
+      "instructions": "Did the agent answer even though a tool call failed or returned only partial results?"
+    },
+    "ignored_instructions": {
+      "type": "noul",
+      "instructions": "Does the final answer ignore or go against instructions given in the user's question?"
+    },
+    "contradicts_knowledge": {
+      "type": "noul",
+      "instructions": "Does the final answer contradict well-established general knowledge?"
+    },
+    "why_wrong": {
+      "type": "choice",
+      "instructions": "Which best explains what is wrong with the final answer? Choose \"correct\" if nothing is wrong.",
+      "criteria": {
+        "correct": "The final answer is correct, complete and supported by the evidence.",
+        "contradicts_evidence": "The final answer contradicts the evidence the agent gathered.",
+        "unsupported": "The final answer makes claims the evidence does not support.",
+        "incomplete": "The final answer leaves out part of what the question asked.",
+        "wrong_lookup": "The agent looked up the wrong thing, so its evidence does not answer the question.",
+        "ignored_tool_failure": "A tool call failed and the agent answered anyway without the information it needed.",
+        "no_answer": "The agent did not give an answer."
+      }
+    }
+  },
+  "actions": {
+    "cancel_pending_order": "cancel a pending order",
+    "modify_pending_order_items": "change items in a pending order (for example another size or color)",
+    "modify_pending_order_address": "change the shipping address of a pending order",
+    "modify_pending_order_payment": "change the payment method of a pending order",
+    "return_delivered_order_items": "return delivered items for a refund",
+    "exchange_delivered_order_items": "exchange delivered items for other items",
+    "modify_user_address": "change their default address on their account",
+    "book_reservation": "book a new flight reservation",
+    "update_reservation_flights": "change the flights, dates or cabin of a reservation",
+    "update_reservation_baggages": "add or change checked bags on a reservation",
+    "update_reservation_passengers": "change passenger details on a reservation",
+    "cancel_reservation": "cancel a reservation",
+    "send_certificate": "get compensation, a certificate or a refund for a problem"
+  }
+}

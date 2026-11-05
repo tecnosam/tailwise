@@ -21,6 +21,8 @@ const (
 	RuleRandomFloor    Rule = "random_floor"
 	RuleBelowThreshold Rule = "below_threshold"
 	RuleFallback       Rule = "fallback"
+	// RuleKeepRule is a heuristic keep rule firing: the model was not asked.
+	RuleKeepRule Rule = "keep_rule"
 )
 
 type Score struct {
@@ -38,6 +40,9 @@ type Score struct {
 	// Deciding holds the answers of the questions that decide; P is their
 	// highest.
 	Deciding map[string]Probability
+	// InputTokens is what the model reported billing for the call, 0 if it
+	// did not say.
+	InputTokens int
 }
 
 type Decision struct {
@@ -52,10 +57,17 @@ type Decision struct {
 	Reason string
 	// Cause is bounded by the manifest, so safe as a metric attribute.
 	Cause string
-	// Severity is the sum of the flagged checks' weight × answer: higher for
-	// more, and higher-priority, problems. 0 when nothing was flagged.
+	// Severity is the deciding questions' average answer: the review order.
+	// It is higher the more checks are worried, so a trace several checks
+	// doubt ranks above one a single check is sure of. A check that failed is
+	// left out of the average; action_wrong on a trace without actions is 0.
+	// Each signal rule counts too, 1 when it fired. A keep rule makes it 1.
 	Severity float64
 }
+
+// Ranked is whether Severity means anything: the model scored the trace, or
+// a keep rule decided it.
+func (d Decision) Ranked() bool { return d.Scored || d.Rule == RuleKeepRule }
 
 type Record struct {
 	Trace    trace.Trace
@@ -68,6 +80,13 @@ type Record struct {
 	// Flags names the checks whose answer reached their threshold, in
 	// priority order: the problems the model found.
 	Flags []string
+	// Rules are the heuristic rules that fired, in the config's order.
+	Rules []RuleResult
+	// InputTokens is the scoring call's billed input, 0 on fallback.
+	InputTokens int
+	// Trimmed means the trace was too long for the model, so the middle of its
+	// longest fields was cut before scoring.
+	Trimmed bool
 }
 
 type Outcome struct {

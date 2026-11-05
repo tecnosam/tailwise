@@ -485,7 +485,7 @@ func TestScoreEndToEndKeep(t *testing.T) {
 			t.Errorf("response is missing %q: %s", f, w.Body)
 		}
 	}
-	for _, f := range []string{"p_keep_raw", "severity"} {
+	for _, f := range []string{"p_keep_raw"} {
 		if _, ok := fields[f]; ok {
 			t.Errorf("response has the removed field %q: %s", f, w.Body)
 		}
@@ -499,6 +499,9 @@ func TestScoreEndToEndKeep(t *testing.T) {
 	}
 	if got.PKeep == nil || *got.PKeep != wantP {
 		t.Errorf("p_keep = %v, want %v", deref(got.PKeep), wantP)
+	}
+	if got.Severity == nil {
+		t.Error("severity = null, want it on every scored trace")
 	}
 
 	// Kev was sent exactly the golden slice.
@@ -579,7 +582,7 @@ func TestScoreEndToEndFallback(t *testing.T) {
 		if got.PKeep != nil {
 			t.Errorf("p_keep = %v, want null for a fallback", deref(got.PKeep))
 		}
-		if !strings.Contains(w.Body.String(), `"p_keep":null`) {
+		if !strings.Contains(w.Body.String(), `"p_keep":null`) || !strings.Contains(w.Body.String(), `"severity":null`) {
 			t.Errorf("body = %s, want explicit nulls", w.Body)
 		}
 		if got.Model != "kev-latest" {
@@ -661,8 +664,7 @@ func TestDecisionLogLine(t *testing.T) {
 			Answers:  map[string]pipeline.Probability{"answer_wrong": 0.95, "unsupported_answer": 0.7, "missing_tool_calls": 0.1},
 			Deciding: map[string]pipeline.Probability{"answer_wrong": 0.95, "unsupported_answer": 0.7, "missing_tool_calls": 0.1}}, nil
 	}
-	checks := []pipeline.Check{{Question: "answer_wrong", Weight: 0.6}, {Question: "unsupported_answer", Weight: 0.3},
-		{Question: "missing_tool_calls", Weight: 0.1}}
+	checks := []pipeline.Check{{Question: "answer_wrong"}, {Question: "unsupported_answer"}, {Question: "missing_tool_calls"}}
 	h := newHarness(t, harnessOpts{
 		models: pipeline.SingleModel(pipeline.Model{Name: "kev-latest", Scorer: &fakeScorer{score: answered}, Checks: checks}),
 		logger: jsonLogger(&buf),
@@ -690,8 +692,8 @@ func TestDecisionLogLine(t *testing.T) {
 	if flags, _ := json.Marshal(line["flags"]); string(flags) != `["answer_wrong","unsupported_answer"]` {
 		t.Errorf("log field flags = %s, want the deciding questions at or above the threshold", flags)
 	}
-	if s, _ := line["severity"].(float64); math.Abs(s-(0.6*0.95+0.3*0.7)) > 1e-9 {
-		t.Errorf("log field severity = %v, want the flagged checks' weight × answer", line["severity"])
+	if s, _ := line["severity"].(float64); math.Abs(s-(0.95+0.7+0.1)/3) > 1e-9 {
+		t.Errorf("log field severity = %v, want the deciding checks' average answer", line["severity"])
 	}
 }
 

@@ -171,7 +171,7 @@ Kustomize can install the chart and apply your overlays on top:
 helmCharts:
   - name: tailwise
     repo: oci://ghcr.io/tecnosam/charts   # or a local copy: helmGlobals.chartHome
-    version: 0.1.0
+    version: 0.2.0
     releaseName: tailwise
     namespace: tailwise
     valuesFile: tailwise-values.yaml
@@ -188,5 +188,5 @@ tailwise-values.yaml > base/tailwise.yaml`.
 The engine validates a config and its manifests without starting:
 
 ```sh
-docker run --rm -v $PWD:/cfg ghcr.io/tecnosam/tailwise:0.1.0 -check -config /cfg/tailwise.yaml
+docker run --rm -v $PWD:/cfg ghcr.io/tecnosam/tailwise:0.2.0 -check -config /cfg/tailwise.yaml
 ```

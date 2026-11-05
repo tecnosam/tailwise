@@ -18,18 +18,31 @@ type AgentName string
 const MaxAgentLength = 128
 
 type Trace struct {
-	TraceID   string     `json:"trace_id,omitempty"`
-	Agent     AgentName  `json:"agent,omitempty"`
-	Question  string     `json:"question"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-	Evidence  []string   `json:"evidence,omitempty"`
+	TraceID string    `json:"trace_id,omitempty"`
+	Agent   AgentName `json:"agent,omitempty"`
+	// SystemPrompt is the instructions the agent ran under, so the model can
+	// judge the run against them; empty when unknown.
+	SystemPrompt string     `json:"system_prompt,omitempty"`
+	Question     string     `json:"question"`
+	ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
+	Evidence     []string   `json:"evidence,omitempty"`
 	// FinalAnswer must be present but may be empty: a run that ended without an
 	// answer is still scored.
 	FinalAnswer string `json:"final_answer"`
+	// Conversation is the user's and the agent's turns in order, when known:
+	// the completeness check reads it to see what the agent said, such as a
+	// request it declined.
+	Conversation []Message `json:"conversation,omitempty"`
 
 	// OTLP holds the original spans of a trace that came through the OTLP
 	// receivers; a kept trace is forwarded as them instead of being rebuilt.
 	OTLP []byte `json:"otlp_spans,omitempty"`
+}
+
+// Message is one turn of the conversation.
+type Message struct {
+	Role    string `json:"role"` // user or assistant
+	Content string `json:"content"`
 }
 
 // Args and Status stay raw: the slice writes them as JSON and needs to know
@@ -38,6 +51,9 @@ type ToolCall struct {
 	Name   string          `json:"name"`
 	Args   json.RawMessage `json:"args,omitempty"`
 	Status json.RawMessage `json:"status,omitempty"`
+	// Output is what the call returned, as text. BuildState does not show it
+	// (it shows evidence); BuildStateGrounded shows it on the call's line.
+	Output string `json:"output,omitempty"`
 }
 
 // StatusText is the string itself, "ok" when absent, or compact JSON.
@@ -101,6 +117,11 @@ func (t Trace) Validate() error {
 	for i, c := range t.ToolCalls {
 		if c.Name == "" {
 			return fmt.Errorf("tool_calls[%d].name is required", i)
+		}
+	}
+	for i, m := range t.Conversation {
+		if m.Role != "user" && m.Role != "assistant" {
+			return fmt.Errorf("conversation[%d].role must be user or assistant, got %q", i, m.Role)
 		}
 	}
 	return nil

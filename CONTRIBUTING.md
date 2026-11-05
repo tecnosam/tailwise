@@ -61,7 +61,9 @@ itself, not a fake.
 `trace.BuildState` renders a trace into the text the model reads. Tool
 arguments, and any status that is not a string, are written as compact JSON
 (`search({"query":"capital of France","limit":3}) -> ok`), and evidence is
-cut to 1500 Unicode code points rather than bytes.
+cut to 1500 Unicode code points rather than bytes. A system prompt opens the
+slice, cut to 8000 code points; without one its section is left out, so the
+slice is what it was before system prompts existed.
 
 - `testdata/traces/*.json`: input fixtures
 - `testdata/golden/*.txt`: the slice for each, as `BuildState` writes it

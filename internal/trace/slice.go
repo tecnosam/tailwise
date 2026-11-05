@@ -7,17 +7,24 @@ import (
 
 // Changing these changes what the model sees.
 const (
-	MaxEvidence      = 3
-	MaxEvidenceChars = 1500
+	MaxEvidence          = 3
+	MaxEvidenceChars     = 1500
+	MaxSystemPromptChars = 8000
 )
 
 type State string
 
 // BuildState renders the trace into the model's state string. The golden
-// tests pin its exact output.
+// tests pin its exact output. The system prompt section is left out when
+// there is none, so a trace without one renders exactly as before.
 func BuildState(t Trace) State {
 	var b strings.Builder
 
+	if t.SystemPrompt != "" {
+		b.WriteString("SYSTEM PROMPT:\n")
+		b.WriteString(truncateRunes(t.SystemPrompt, MaxSystemPromptChars))
+		b.WriteString("\n\n")
+	}
 	b.WriteString("USER QUESTION:\n")
 	b.WriteString(t.Question)
 

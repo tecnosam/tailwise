@@ -213,6 +213,47 @@ func TestAssembleEvidenceSources(t *testing.T) {
 	}
 }
 
+func TestAssembleSystemPrompt(t *testing.T) {
+	root := func(extra ...string) *tracepb.Span {
+		return span(1, 0, "run", 100, append([]string{attrSpanKind, kindAgent, attrInputValue, "q", attrOutputValue, "a"}, extra...)...)
+	}
+	msg := func(i int, field string) string { return fmt.Sprintf("llm.input_messages.%d.message.%s", i, field) }
+	// The first LLM call: a user message, then the system message.
+	first := span(3, 1, "llm", 200, attrSpanKind, kindLLM,
+		msg(0, "role"), "user", msg(0, "content"), "hello",
+		msg(1, "role"), "system", msg(1, "content"), "Only refund delivered orders.")
+	later := span(4, 1, "llm", 300, attrSpanKind, kindLLM,
+		msg(0, "role"), "system", msg(0, "content"), "A sub-agent's prompt.")
+	parts := span(3, 1, "llm", 200, attrSpanKind, kindLLM,
+		msg(0, "role"), "system",
+		msg(0, "contents.0.message_content.text"), "Be brief.",
+		msg(0, "contents.1.message_content.text"), "Cite sources.")
+	noSystem := span(3, 1, "llm", 200, attrSpanKind, kindLLM, msg(0, "role"), "user", msg(0, "content"), "hi")
+
+	tests := []struct {
+		name  string
+		spans []*tracepb.Span
+		want  string
+	}{
+		{"the explicit attribute wins", []*tracepb.Span{root(AttrSystemPrompt, "explicit"), first}, "explicit"},
+		{"the first LLM call's system message", []*tracepb.Span{root(), later, first}, "Only refund delivered orders."},
+		{"a message split into parts", []*tracepb.Span{root(), parts}, "Be brief.\nCite sources."},
+		{"no system message", []*tracepb.Span{root(), noSystem}, ""},
+		{"no LLM spans", []*tracepb.Span{root()}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := assemble(t, tt.spans)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.SystemPrompt != tt.want {
+				t.Errorf("system prompt = %q, want %q", got.SystemPrompt, tt.want)
+			}
+		})
+	}
+}
+
 func TestAssembleToolCallDetails(t *testing.T) {
 	failed := span(2, 1, "execute_tool search", 200, attrSpanKind, kindTool, attrToolName, "search", attrInputValue, `{"query": "x"}`)
 	failed.Status = &tracepb.Status{Code: tracepb.Status_STATUS_CODE_ERROR, Message: "boom"}
@@ -228,6 +269,12 @@ func TestAssembleToolCallDetails(t *testing.T) {
 		span(5, 1, "fetch", 500, attrSpanKind, kindTool, attrToolName, "fetch", attrToolParameters, `{"url": "u"}`),
 		// No input at all.
 		span(6, 1, "now", 600, attrSpanKind, kindTool, attrToolName, "now"),
+		// A failure reported in the output, with the span left OK, and one
+		// that only mentions an error.
+		span(7, 1, "cancel", 700, attrSpanKind, kindTool, attrToolName, "cancel",
+			attrOutputValue, "  error: order not found"),
+		span(8, 1, "search", 800, attrSpanKind, kindTool, attrToolName, "search",
+			attrOutputValue, `{"result": "Error handling in Go uses values."}`),
 	}
 	got, err := assemble(t, spans)
 	if err != nil {
@@ -238,8 +285,10 @@ func TestAssembleToolCallDetails(t *testing.T) {
 		"2. lookup({\"title\":\"T\"}) -> not_found\n" +
 		"3. calculator(\"2 + 2\") -> ok\n" +
 		"4. fetch({\"url\":\"u\"}) -> ok\n" +
-		"5. now() -> ok\n\n" +
-		"EVIDENCE:\n(none)\n\nFINAL ANSWER:\na"
+		"5. now() -> ok\n" +
+		"6. cancel() -> error\n" +
+		"7. search() -> ok\n\n" +
+		"EVIDENCE:\n[1] Error handling in Go uses values.\n\nFINAL ANSWER:\na"
 	if state := string(trace.BuildState(got)); state != want {
 		t.Errorf("state =\n%s\nwant\n%s", state, want)
 	}
@@ -250,6 +299,8 @@ func TestAssembleQuestionAndAnswerFromJSON(t *testing.T) {
 		{"plain question", "plain answer", "plain question", "plain answer"},
 		{`{"question": "What?"}`, `{"answer": "This."}`, "What?", "This."},
 		{`{"input": "What?", "session": 3}`, `{"output": "This."}`, "What?", "This."},
+		// smolagents records a run's input as {"task": ...}.
+		{`{"task": "What?", "additional_args": {}}`, `"This."`, "What?", "This."},
 		{`"quoted question"`, `"quoted answer"`, "quoted question", "quoted answer"},
 		// JSON without a recognised key is passed through whole.
 		{`{"messages": []}`, `{"choices": []}`, `{"messages": []}`, `{"choices": []}`},
@@ -304,6 +355,18 @@ func TestAssembleADKInvocation(t *testing.T) {
 	}
 }
 
+// An agent run that ended without an answer (it crashed, or ran out of
+// steps) is scored with an empty one.
+func TestAssembleAgentWithoutAnswer(t *testing.T) {
+	got, err := assemble(t, []*tracepb.Span{span(1, 0, "CodeAgent.run", 100, attrSpanKind, kindAgent, attrInputValue, "q")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Question != "q" || got.FinalAnswer != "" {
+		t.Errorf("question = %q, final answer = %q", got.Question, got.FinalAnswer)
+	}
+}
+
 func TestAssembleNotScorable(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -311,7 +374,7 @@ func TestAssembleNotScorable(t *testing.T) {
 		wantErr string
 	}{
 		{"no question", []*tracepb.Span{span(1, 0, "GET /users", 100, "http.method", "GET")}, "has no input.value"},
-		{"no answer", []*tracepb.Span{span(1, 0, "run", 100, attrSpanKind, kindAgent, attrInputValue, "q")}, "has no output.value"},
+		{"no answer", []*tracepb.Span{span(1, 0, "run", 100, attrSpanKind, kindChain, attrInputValue, "q")}, "has no output.value"},
 		// Only children arrived: the best available root is a tool span.
 		{"root span missing", []*tracepb.Span{span(2, 1, "search", 100, attrSpanKind, kindTool, attrInputValue, `{"q": 1}`)}, "has no output.value"},
 	}

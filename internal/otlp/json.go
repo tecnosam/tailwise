@@ -17,7 +17,8 @@ var idFields = map[string]bool{
 	"trace_id": true, "span_id": true, "parent_span_id": true,
 }
 
-func unmarshalJSON(data []byte, req *coltracepb.ExportTraceServiceRequest) error {
+// UnmarshalJSON decodes an OTLP/JSON export request, IDs in hex.
+func UnmarshalJSON(data []byte, req *coltracepb.ExportTraceServiceRequest) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber() // keep 64-bit timestamps exact
 	var doc any

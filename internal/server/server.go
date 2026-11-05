@@ -13,6 +13,7 @@ import (
 	"github.com/tecnosam/tailwise/internal/fault"
 	"github.com/tecnosam/tailwise/internal/metrics"
 	"github.com/tecnosam/tailwise/internal/observe"
+	"github.com/tecnosam/tailwise/internal/otlp"
 	"github.com/tecnosam/tailwise/internal/pipeline"
 	"github.com/tecnosam/tailwise/internal/trace"
 )
@@ -30,6 +31,9 @@ type Options struct {
 	Metrics  common.RequestMetrics
 	// MaxBodyBytes 0 means 8 MiB.
 	MaxBodyBytes int64
+	// Assembler turns the spans sent to POST /v1/otlp/traces:score into a
+	// trace, as the OTLP receivers' assemblers do.
+	Assembler otlp.Assembler
 }
 
 type Server struct {
@@ -50,6 +54,7 @@ func New(opts Options) *Server {
 	s := &Server{opts: opts, mux: http.NewServeMux()}
 	s.mux.HandleFunc("POST /v1/traces", s.handleEnqueue)
 	s.mux.HandleFunc("POST /v1/traces:score", s.handleScore)
+	s.mux.HandleFunc("POST /v1/otlp/traces:score", s.handleScoreOTLP)
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
 	s.mux.HandleFunc("GET /openapi.yaml", s.handleOpenAPI)
@@ -81,6 +86,33 @@ func (s *Server) handleScore(w http.ResponseWriter, r *http.Request) {
 	// The response does not wait for the export: the export workers send the
 	// trace moments later.
 	writeJSON(w, http.StatusOK, resultOf(s.opts.Engine.Process(r.Context(), t)))
+}
+
+// handleScoreOTLP scores one trace sent as OTLP spans, the way the receivers'
+// assemblers would build it, without the queue or the wait for late spans.
+func (s *Server) handleScoreOTLP(w http.ResponseWriter, r *http.Request) {
+	export, _, code, err := otlp.ReadExport(w, r)
+	if err != nil {
+		writeError(w, code, err.Error())
+		return
+	}
+	byTrace, _, err := otlp.Split(export.GetResourceSpans())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(byTrace) != 1 {
+		writeError(w, http.StatusBadRequest, "the request must hold the spans of exactly one trace")
+		return
+	}
+	for id, spans := range byTrace {
+		t, err := s.opts.Assembler.Assemble(id, [][]byte{spans})
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, resultOf(s.opts.Engine.Process(r.Context(), t)))
+	}
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {

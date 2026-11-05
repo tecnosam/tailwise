@@ -55,6 +55,9 @@ scorer:
   # manifest: manifests/my-agent.json
   decision_question: answer_wrong
   reason_question: why_wrong   # a choice question; the option chosen is the plain-English reason
+  system_prompt: false   # show the model the agent's system prompt (costs its tokens on every call)
+  evidence: grounded     # how tool results reach the model: grounded (each call's result) or first (3 items)
+  evidence_budget: 12000 # grounded only: characters of tool results shown
   timeout: 30s           # per call
   # Retries on the synchronous endpoint only. A queued trace makes one call
   # per delivery and the queue redelivers it (max_deliver, redelivery_backoff).

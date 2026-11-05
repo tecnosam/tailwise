@@ -1,0 +1,423 @@
+{
+  "schema": 1,
+  "date": "2026-11-05",
+  "jev_model": "jev-1.14.0",
+  "source": "cb86569a320ee940ece6fd0341cff9202cf3f2c8",
+  "usd_per_million_input_tokens": 0.042,
+  "scenario": {
+    "traces": 10000,
+    "failure_rate": 0.1,
+    "review_budget": 0.05,
+    "reviews": 500,
+    "random_found": 50.0,
+    "random_reviews_per_failure": 10.0
+  },
+  "datasets": {
+    "tau": {
+      "name": "τ-bench",
+      "agent": "Customer-service agents (GPT-4o, Claude 3.5 Sonnet) in airline and retail simulations, acting through tools for a simulated user"
+    },
+    "swe": {
+      "name": "SWE-agent",
+      "agent": "SWE-agent on Llama models (8B, 70B, 405B) fixing GitHub issues; a run fails when its patch does not pass the tests"
+    },
+    "trail": {
+      "name": "TRAIL",
+      "agent": "smolagents runs on GAIA and SWE-bench, with failures annotated by hand"
+    }
+  },
+  "results": [
+    {
+      "dataset": "swe",
+      "slice": "all",
+      "setup": "builtin",
+      "rules": false,
+      "runs": 1000,
+      "failed": 773,
+      "rough": true,
+      "precision": 0.5158885975135975,
+      "precision_ci95": [
+        0.23916666666666667,
+        0.8328671328671327
+      ],
+      "found": 257.94429875679873,
+      "found_ci95": [
+        119.58333333333333,
+        416.43356643356634
+      ],
+      "multiple": 5.158885975135974,
+      "reviews_per_failure": 1.9384029901409918,
+      "random_reviews_for_same": 2579.442987567987,
+      "jev_usd": 2.4975804,
+      "jev_usd_per_extra_failure": 0.012010814506249317,
+      "input_tokens_per_run": 5946.62,
+      "roc_auc": 0.8556570601409917,
+      "vs_baseline": null,
+      "run": "20261105T121615Z_cb86569-dirty"
+    },
+    {
+      "dataset": "tau",
+      "slice": "all",
+      "setup": "builtin",
+      "rules": false,
+      "runs": 1980,
+      "failed": 797,
+      "rough": false,
+      "precision": 0.21974975969102511,
+      "precision_ci95": [
+        0.12301136363636364,
+        0.31550868486352346
+      ],
+      "found": 109.87487984551255,
+      "found_ci95": [
+        61.50568181818182,
+        157.75434243176173
+      ],
+      "multiple": 2.1974975969102513,
+      "reviews_per_failure": 4.550630687405668,
+      "random_reviews_for_same": 1098.7487984551256,
+      "jev_usd": 1.3813413939393941,
+      "jev_usd_per_extra_failure": 0.023070466237318416,
+      "input_tokens_per_run": 3288.9080808080807,
+      "roc_auc": 0.6452626130746004,
+      "vs_baseline": null,
+      "run": "20261105T121615Z_cb86569-dirty"
+    },
+    {
+      "dataset": "tau",
+      "slice": "detectable",
+      "setup": "builtin",
+      "rules": false,
+      "runs": 1304,
+      "failed": 554,
+      "rough": false,
+      "precision": 0.3044181139060137,
+      "precision_ci95": [
+        0.162460716530484,
+        0.48247377622377613
+      ],
+      "found": 152.20905695300684,
+      "found_ci95": [
+        81.230358265242,
+        241.23688811188808
+      ],
+      "multiple": 3.0441811390601368,
+      "reviews_per_failure": 3.284955639363632,
+      "random_reviews_for_same": 1522.0905695300683,
+      "jev_usd": 1.312554754601227,
+      "jev_usd_per_extra_failure": 0.01284186346817295,
+      "input_tokens_per_run": 3125.1303680981596,
+      "roc_auc": 0.708395908543923,
+      "vs_baseline": null,
+      "run": "20261105T121615Z_cb86569-dirty"
+    },
+    {
+      "dataset": "trail",
+      "slice": "all",
+      "setup": "builtin",
+      "rules": false,
+      "runs": 148,
+      "failed": 110,
+      "rough": true,
+      "precision": 0.3116666666666667,
+      "precision_ci95": [
+        0.0,
+        1.0
+      ],
+      "found": 155.83333333333334,
+      "found_ci95": [
+        0.0,
+        500.0
+      ],
+      "multiple": 3.1166666666666667,
+      "reviews_per_failure": 3.2085561497326203,
+      "random_reviews_for_same": 1558.3333333333333,
+      "jev_usd": 1.5403613513513514,
+      "jev_usd_per_extra_failure": 0.01455459544583954,
+      "input_tokens_per_run": 3667.527027027027,
+      "roc_auc": 0.6728468899521531,
+      "vs_baseline": null,
+      "run": "20261105T121615Z_cb86569-dirty"
+    },
+    {
+      "dataset": "tau",
+      "slice": "all",
+      "setup": "tau-actions",
+      "rules": false,
+      "runs": 1980,
+      "failed": 797,
+      "rough": false,
+      "precision": 0.23004268491897123,
+      "precision_ci95": [
+        0.1447236473880597,
+        0.3435284514925373
+      ],
+      "found": 115.02134245948561,
+      "found_ci95": [
+        72.36182369402985,
+        171.76422574626866
+      ],
+      "multiple": 2.300426849189712,
+      "reviews_per_failure": 4.347019338399018,
+      "random_reviews_for_same": 1150.213424594856,
+      "jev_usd": 3.57612203030303,
+      "jev_usd_per_extra_failure": 0.0549992032620872,
+      "input_tokens_per_run": 8514.576262626262,
+      "roc_auc": 0.6684020062554952,
+      "vs_baseline": {
+        "against": "answer_wrong_alone",
+        "gain": -0.004077857424389931,
+        "ci95": [
+          -0.10691724941724942,
+          0.0917560634328358
+        ]
+      },
+      "run": "20261105T121625Z_cb86569-dirty"
+    },
+    {
+      "dataset": "tau",
+      "slice": "detectable",
+      "setup": "tau-actions",
+      "rules": false,
+      "runs": 1304,
+      "failed": 554,
+      "rough": false,
+      "precision": 0.47313600914341186,
+      "precision_ci95": [
+        0.2564102564102564,
+        0.6633720930232556
+      ],
+      "found": 236.56800457170593,
+      "found_ci95": [
+        128.2051282051282,
+        331.6860465116278
+      ],
+      "multiple": 4.7313600914341185,
+      "reviews_per_failure": 2.113557160467342,
+      "random_reviews_for_same": 2365.6800457170593,
+      "jev_usd": 3.3248749233128834,
+      "jev_usd_per_extra_failure": 0.017821249313062112,
+      "input_tokens_per_run": 7916.368865030675,
+      "roc_auc": 0.7320264741275572,
+      "vs_baseline": {
+        "against": "answer_wrong_alone",
+        "gain": 0.1687674847576362,
+        "ci95": [
+          -0.011931818181818168,
+          0.35426829268292664
+        ]
+      },
+      "run": "20261105T121625Z_cb86569-dirty"
+    },
+    {
+      "dataset": "swe",
+      "slice": "all",
+      "setup": "builtin",
+      "rules": true,
+      "runs": 1000,
+      "failed": 773,
+      "rough": true,
+      "precision": 0.5592766726737315,
+      "precision_ci95": [
+        0.28568181818181815,
+        0.8123529411764704
+      ],
+      "found": 279.63833633686573,
+      "found_ci95": [
+        142.84090909090907,
+        406.1764705882352
+      ],
+      "multiple": 5.592766726737315,
+      "reviews_per_failure": 1.7880237972724744,
+      "random_reviews_for_same": 2796.3833633686572,
+      "jev_usd": 1.4303162999999999,
+      "jev_usd_per_extra_failure": 0.006228560626313767,
+      "input_tokens_per_run": 3405.515,
+      "roc_auc": 0.8656102717828018,
+      "vs_baseline": {
+        "against": "jev_alone",
+        "gain": 0.043388075160133974,
+        "ci95": [
+          -0.34924242424242424,
+          0.4312499999999998
+        ]
+      },
+      "run": "20261105T121633Z_cb86569-dirty"
+    },
+    {
+      "dataset": "tau",
+      "slice": "all",
+      "setup": "builtin",
+      "rules": true,
+      "runs": 1980,
+      "failed": 797,
+      "rough": false,
+      "precision": 0.17873003969313442,
+      "precision_ci95": [
+        0.08134615384615385,
+        0.26741258741258733
+      ],
+      "found": 89.36501984656721,
+      "found_ci95": [
+        40.67307692307692,
+        133.70629370629368
+      ],
+      "multiple": 1.7873003969313441,
+      "reviews_per_failure": 5.595030369359971,
+      "random_reviews_for_same": 893.650198465672,
+      "jev_usd": 1.3813413939393941,
+      "jev_usd_per_extra_failure": 0.035090580401672344,
+      "input_tokens_per_run": 3288.9080808080807,
+      "roc_auc": 0.6059589479143577,
+      "vs_baseline": {
+        "against": "jev_alone",
+        "gain": -0.04101971999789069,
+        "ci95": [
+          -0.1451550839552239,
+          0.08739596469104657
+        ]
+      },
+      "run": "20261105T121633Z_cb86569-dirty"
+    },
+    {
+      "dataset": "tau",
+      "slice": "detectable",
+      "setup": "builtin",
+      "rules": true,
+      "runs": 1304,
+      "failed": 554,
+      "rough": false,
+      "precision": 0.30193760979323914,
+      "precision_ci95": [
+        0.1794871794871795,
+        0.4461337209302325
+      ],
+      "found": 150.96880489661956,
+      "found_ci95": [
+        89.74358974358974,
+        223.06686046511626
+      ],
+      "multiple": 3.0193760979323914,
+      "reviews_per_failure": 3.311942492638728,
+      "random_reviews_for_same": 1509.6880489661955,
+      "jev_usd": 1.312554754601227,
+      "jev_usd_per_extra_failure": 0.012999606719571774,
+      "input_tokens_per_run": 3125.1303680981596,
+      "roc_auc": 0.6765691937424789,
+      "vs_baseline": {
+        "against": "jev_alone",
+        "gain": -0.0024805041127745385,
+        "ci95": [
+          -0.19575845665961947,
+          0.18837209302325578
+        ]
+      },
+      "run": "20261105T121633Z_cb86569-dirty"
+    },
+    {
+      "dataset": "trail",
+      "slice": "all",
+      "setup": "builtin",
+      "rules": true,
+      "runs": 148,
+      "failed": 110,
+      "rough": true,
+      "precision": 0.24166666666666664,
+      "precision_ci95": [
+        0.0,
+        0.8416666666666638
+      ],
+      "found": 120.83333333333331,
+      "found_ci95": [
+        0.0,
+        420.8333333333319
+      ],
+      "multiple": 2.416666666666666,
+      "reviews_per_failure": 4.137931034482759,
+      "random_reviews_for_same": 1208.333333333333,
+      "jev_usd": 1.432690945945946,
+      "jev_usd_per_extra_failure": 0.02022622511923689,
+      "input_tokens_per_run": 3411.1689189189187,
+      "roc_auc": 0.5696172248803828,
+      "vs_baseline": {
+        "against": "jev_alone",
+        "gain": -0.07,
+        "ci95": [
+          -0.6666666666666666,
+          0.5
+        ]
+      },
+      "run": "20261105T121633Z_cb86569-dirty"
+    },
+    {
+      "dataset": "tau",
+      "slice": "all",
+      "setup": "tau-actions",
+      "rules": true,
+      "runs": 1980,
+      "failed": 797,
+      "rough": false,
+      "precision": 0.1948571163520232,
+      "precision_ci95": [
+        0.11428571428571428,
+        0.2791947115384615
+      ],
+      "found": 97.4285581760116,
+      "found_ci95": [
+        57.14285714285714,
+        139.59735576923075
+      ],
+      "multiple": 1.948571163520232,
+      "reviews_per_failure": 5.13196550745126,
+      "random_reviews_for_same": 974.285581760116,
+      "jev_usd": 3.57612203030303,
+      "jev_usd_per_extra_failure": 0.07540018435794996,
+      "input_tokens_per_run": 8514.576262626262,
+      "roc_auc": 0.62842750339131,
+      "vs_baseline": {
+        "against": "jev_alone",
+        "gain": -0.035185568566948024,
+        "ci95": [
+          -0.11195312499999999,
+          0.03833333333333324
+        ]
+      },
+      "run": "20261105T121649Z_cb86569-dirty"
+    },
+    {
+      "dataset": "tau",
+      "slice": "detectable",
+      "setup": "tau-actions",
+      "rules": true,
+      "runs": 1304,
+      "failed": 554,
+      "rough": false,
+      "precision": 0.42016135953947065,
+      "precision_ci95": [
+        0.27147865853658537,
+        0.5857142857142856
+      ],
+      "found": 210.08067976973533,
+      "found_ci95": [
+        135.7393292682927,
+        292.85714285714283
+      ],
+      "multiple": 4.201613595394707,
+      "reviews_per_failure": 2.380037995631196,
+      "random_reviews_for_same": 2100.806797697353,
+      "jev_usd": 3.3248749233128834,
+      "jev_usd_per_extra_failure": 0.020769995030602565,
+      "input_tokens_per_run": 7916.368865030675,
+      "roc_auc": 0.6973044524669073,
+      "vs_baseline": {
+        "against": "jev_alone",
+        "gain": -0.05297464960394119,
+        "ci95": [
+          -0.21191860465116283,
+          0.14687499999999964
+        ]
+      },
+      "run": "20261105T121649Z_cb86569-dirty"
+    }
+  ]
+}

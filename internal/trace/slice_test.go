@@ -28,7 +28,7 @@ func TestBuildStateGolden(t *testing.T) {
 	if len(traces) == 0 {
 		t.Fatal("no trace fixtures found")
 	}
-	if len(traces) != len(goldens) {
+	if !*update && len(traces) != len(goldens) {
 		t.Fatalf("%d traces but %d golden files; run `make golden`", len(traces), len(goldens))
 	}
 

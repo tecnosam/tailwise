@@ -112,6 +112,7 @@ func TestRecordSurvivesTheStream(t *testing.T) {
 		Latency:  93 * time.Millisecond,
 		Answers:  map[string]pipeline.Probability{"answer_wrong": 0.95, "unsupported_answer": 0.75},
 		Flags:    []string{"answer_wrong", "unsupported_answer"},
+		Rules:    []pipeline.RuleResult{{Name: "answer_json", Keep: true, Fired: true, Reason: "not JSON"}},
 	}
 	if err := q.Enqueue(context.Background(), want); err != nil {
 		t.Fatal(err)
@@ -120,7 +121,7 @@ func TestRecordSurvivesTheStream(t *testing.T) {
 	case rec := <-got:
 		if rec.Trace.TraceID != "t1" || rec.Trace.Agent != "support-bot" || rec.Agent != "support-bot" || string(rec.Trace.OTLP) != "\x01\x02\x03" ||
 			rec.Decision != want.Decision || rec.Model != want.Model || rec.Latency != want.Latency ||
-			!maps.Equal(rec.Answers, want.Answers) || !slices.Equal(rec.Flags, want.Flags) {
+			!maps.Equal(rec.Answers, want.Answers) || !slices.Equal(rec.Flags, want.Flags) || !slices.Equal(rec.Rules, want.Rules) {
 			t.Errorf("received %+v, want %+v", rec, want)
 		}
 	case <-time.After(10 * time.Second):

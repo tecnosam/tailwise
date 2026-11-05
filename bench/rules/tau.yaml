@@ -1,0 +1,18 @@
+# Heuristic rules for τ-bench's customer-service agents (retail and airline),
+# written from what such an agent is for, before looking at any result: a
+# team running this agent could write the same on day one. Never tuned on the
+# labels; change them only for a reason that holds without the results.
+rules:
+  # A conversation that ends without a reply has certainly failed the user.
+  - name: no_answer
+    on_fail: keep
+    final_answer: {not_empty: true}
+  # A tool returned an error (an output starting "Error:"): the agent may
+  # recover, so it only raises the review order.
+  - name: tool_failed
+    on_fail: signal
+    tool_output: {ok_status: true}
+  # The same lookup or action three times with the same arguments: stuck.
+  - name: looping
+    on_fail: signal
+    run: {max_repeated_calls: 2}

@@ -86,6 +86,9 @@ type response struct {
 	Answers          map[string]json.RawMessage `json:"answers"`
 	LatencyMS        *float64                   `json:"latency_ms"`
 	EvaluationTimeMS *float64                   `json:"evaluation_time_ms"`
+	Usage            struct {
+		InputTokens int `json:"input_tokens"`
+	} `json:"usage"`
 }
 
 type noulAnswer struct {
@@ -107,6 +110,30 @@ func (c *Client) Score(ctx context.Context, state trace.State) (pipeline.Score, 
 		return pipeline.Score{}, classify(err)
 	}
 	return score, nil
+}
+
+// Ask makes one call with questions of the caller's own, for the action
+// checks: every well-formed yes/no answer, and the input billed.
+func (c *Client) Ask(ctx context.Context, state trace.State, questions json.RawMessage) (pipeline.Answers, error) {
+	body, err := json.Marshal(request{Model: c.cfg.Model, State: string(state), Questions: questions})
+	if err != nil {
+		return pipeline.Answers{}, fault.Internal(fault.Scorer, "encode request", err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
+	defer cancel()
+	req, err := c.newRequest(ctx, body)
+	if err != nil {
+		return pipeline.Answers{}, classify(err)
+	}
+	raw, err := c.send(req)
+	if err != nil {
+		return pipeline.Answers{}, classify(err)
+	}
+	var out response
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return pipeline.Answers{}, classify(fmt.Errorf("decode model response: %w", err))
+	}
+	return pipeline.Answers{P: noulAnswers(out), InputTokens: out.Usage.InputTokens}, nil
 }
 
 func (c *Client) attempt(ctx context.Context, body []byte) (pipeline.Score, error) {
@@ -171,7 +198,8 @@ func (c *Client) parse(raw []byte, elapsed time.Duration) (pipeline.Score, error
 		deciding[q] = a
 		p = max(p, a)
 	}
-	score := pipeline.Score{P: p, Answers: answers, Deciding: deciding, Model: c.modelName(out), Latency: reportedLatency(out, elapsed)}
+	score := pipeline.Score{P: p, Answers: answers, Deciding: deciding, Model: c.modelName(out), Latency: reportedLatency(out, elapsed),
+		InputTokens: out.Usage.InputTokens}
 	score.Cause, score.Explanation = c.reasonAnswer(out)
 	return score, nil
 }

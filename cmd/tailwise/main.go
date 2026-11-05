@@ -224,7 +224,8 @@ func explainAddrInUse(err error) error {
 }
 
 func (a *app) startHTTP(context.Context) error {
-	srv := server.New(server.Options{Engine: a.engine, Queue: a.queue, Reporter: a.reporter, Metrics: a.metrics})
+	srv := server.New(server.Options{Engine: a.engine, Queue: a.queue, Reporter: a.reporter, Metrics: a.metrics,
+		Assembler: otlp.Assembler{AgentAttributes: a.cfg.OTLP.AgentAttributes}})
 	a.http = &http.Server{
 		Addr:              a.cfg.Server.Addr,
 		Handler:           srv.Handler(),

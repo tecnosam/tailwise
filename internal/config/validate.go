@@ -10,6 +10,7 @@ import (
 	"time"
 
 	exportnats "github.com/tecnosam/tailwise/internal/export/natsq"
+	"github.com/tecnosam/tailwise/internal/trace"
 )
 
 func (c File) validate(p *problems) {
@@ -34,6 +35,10 @@ func validateScorer(p *problems, key string, s Scorer) {
 	p.url(key+".endpoint", s.Endpoint)
 	p.nonEmpty(key+".model", s.Model)
 	p.nonEmpty(key+".decision_question", s.DecisionQuestion)
+	if s.Evidence != trace.EvidenceFirst && s.Evidence != trace.EvidenceGrounded {
+		p.add("%s.evidence must be %q or %q, got %q", key, trace.EvidenceFirst, trace.EvidenceGrounded, s.Evidence)
+	}
+	p.atLeast(key+".evidence_budget", s.EvidenceBudget, 1)
 	p.positive(key+".timeout", s.Timeout)
 	p.atLeast(key+".max_retries", s.MaxRetries, 0)
 	p.backoff(key+".backoff", s.Backoff)

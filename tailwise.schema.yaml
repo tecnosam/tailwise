@@ -35,6 +35,19 @@ $defs:
     type: number
     minimum: 0
     maximum: 1
+  ruleText:
+    type: object
+    description: >-
+      What a piece of text must be. Each key set is one expectation; the rule
+      fires when any is broken.
+    properties:
+      not_empty: {type: boolean, description: Fires when it is empty or only whitespace.}
+      min_length: {type: integer, minimum: 0, description: Fires under this many characters.}
+      max_length: {type: integer, minimum: 0, description: Fires over this many characters.}
+      matches: {type: string, description: A regular expression (Go syntax) it must match.}
+      not_matches: {type: string, description: A regular expression it must not match.}
+      json: {type: boolean, description: Fires when it does not parse as JSON.}
+      json_schema: {type: object, description: 'A JSON Schema (draft 2020-12 unless it says) it must be valid against.'}
 
 properties:
   server:
@@ -318,6 +331,38 @@ properties:
           why_wrong. A manifest without it gives reasons that only say how
           likely the answer is wrong, with a warning at start-up. Empty turns
           reasons off.
+      system_prompt:
+        type: boolean
+        description: >-
+          Show the model the agent's system prompt, above the question. The
+          prompt comes from the trace's system_prompt (JSON API), the root
+          span's tailwise.system_prompt, or the first LLM span's system
+          message, and is cut to 8000 characters. Off by default: in the
+          benchmark it kept more traces without ranking failures better,
+          and it adds the prompt's tokens to every call.
+      evidence:
+        type: string
+        enum: [first, grounded]
+        default: grounded
+        description: >-
+          How tool results reach the model. grounded: each tool call's result
+          on its line, within evidence_budget characters, choosing first the
+          results whose values later calls use as arguments, then the most
+          recent; a long result keeps the parts later calls used. first: the
+          first three evidence items (explicit tailwise.evidence.*, else
+          RETRIEVER documents, else paragraphs of successful tool outputs),
+          each cut to 1500 characters; tool-call lines show only the status.
+          In the benchmark, first hid most tool results and the model flagged
+          what it could not check, so it ranked failures worse at about half
+          the cost.
+      evidence_budget:
+        type: integer
+        minimum: 1
+        default: 12000
+        description: >-
+          With evidence grounded, the most characters of tool results shown,
+          across all calls (about 4 characters per token). Ignored with
+          first.
       timeout:
         $ref: '#/$defs/duration'
         default: 30s
@@ -558,3 +603,70 @@ properties:
           items: {$ref: '#/$defs/duration'}
           default: [1s, 5s, 30s]
           description: Wait before each retry; the last value repeats. Empty means the default.
+
+  rules:
+    type: array
+    default: []
+    description: >-
+      Heuristic rules every agent gets: certain, free checks that need no
+      model, such as "the final answer is valid JSON" or "no tool call
+      failed". An agent's manifest adds its own under "rules", in the same
+      form; one with the same name replaces the default, and one with
+      enabled false removes it for that agent. A fired rule is listed in the
+      response's rules, the log and the export (eval.rules). Rule: names are
+      unique; each rule sets exactly one of final_answer, tool_output,
+      tool_args and run.
+    items:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Identifies the rule in decisions and in a manifest's overrides.
+        on_fail:
+          enum: [keep, signal, '']
+          default: signal
+          description: >-
+            keep: when the rule fires, the trace is kept without asking the
+            model (decision rule keep_rule, severity 1, p_keep null). Use it
+            for failures that are certain, such as broken JSON. signal: the
+            rule counts 1 in severity when it fires and 0 when it does not,
+            next to the model's answers, and does not decide keep or drop.
+            Every signal rule weighs as much as a check, so keep them few.
+        enabled:
+          type: boolean
+          description: false turns off the default rule of the same name, in a manifest.
+        reason:
+          type: string
+          description: Replaces the rule's own description of what the trace broke.
+        final_answer:
+          $ref: '#/$defs/ruleText'
+          description: What the final answer must be.
+        tool_output:
+          description: What every call's output must be, or every call to tool's.
+          allOf: [{$ref: '#/$defs/ruleText'}]
+          properties:
+            tool: {type: string, description: Only calls to this tool; empty is every call.}
+            ok_status: {type: boolean, description: Fires on a call whose status is not ok.}
+        tool_args:
+          type: object
+          additionalProperties: false
+          required: [json_schema]
+          description: What every call's arguments must be, or every call to tool's.
+          properties:
+            tool: {type: string, description: Only calls to this tool; empty is every call.}
+            json_schema: {type: object, description: A JSON Schema the arguments must be valid against.}
+        run:
+          type: object
+          additionalProperties: false
+          description: Limits on the run as a whole.
+          properties:
+            max_tool_calls: {type: integer, minimum: 0, description: Fires over this many tool calls.}
+            max_repeated_calls:
+              type: integer
+              minimum: 0
+              description: Fires when one call, same tool and arguments, is made more than this many times.
+            requires_tools: {type: array, items: {type: string}, description: Fires when any is never called.}
+            forbids_tools: {type: array, items: {type: string}, description: Fires when any is called.}

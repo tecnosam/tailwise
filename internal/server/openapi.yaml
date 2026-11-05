@@ -106,6 +106,7 @@ paths:
                     trace_id: wrong-river-001
                     decision: keep
                     p_keep: 0.98
+                    severity: 0.98
                     rule: above_threshold
                     reason: The final answer contradicts the evidence the agent gathered.
                     cause: contradicts_evidence
@@ -118,6 +119,7 @@ paths:
                     trace_id: 7f3a91c2e8
                     decision: drop
                     p_keep: 0.04
+                    severity: 0.04
                     rule: below_threshold
                     reason: The final answer is correct, complete and supported by the evidence.
                     cause: correct
@@ -130,6 +132,7 @@ paths:
                     trace_id: wrong-river-001
                     decision: drop
                     p_keep: null
+                    severity: null
                     rule: fallback
                     reason: The model could not score this trace, so it was dropped at random.
                     model: jev-latest
@@ -139,6 +142,66 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "413":
           $ref: "#/components/responses/TooLarge"
+  /v1/otlp/traces:score:
+    post:
+      tags: [traces]
+      operationId: scoreOTLPTrace
+      summary: Score a trace sent as OTLP spans, synchronously
+      description: |
+        Takes one trace as an OTLP/HTTP export request (protobuf or JSON,
+        optionally gzipped), builds the trace from its spans exactly as the
+        OTLP receivers do, scores it and returns the decision. There is no
+        queue and no wait for late spans, so send every span of the trace in
+        one request. Meant for testing and benchmarks.
+
+        Fallback behaves as for `POST /v1/traces:score`.
+      requestBody:
+        required: true
+        content:
+          application/x-protobuf:
+            schema:
+              type: string
+              format: binary
+              description: An `ExportTraceServiceRequest` holding the spans of one trace.
+          application/json:
+            schema:
+              type: object
+              description: An `ExportTraceServiceRequest` in OTLP/JSON, IDs as hex.
+      responses:
+        "200":
+          description: The decision for the trace.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Decision"
+        "400":
+          description: The body is not an OTLP export request, or holds spans of no trace or of more than one.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: the request must hold the spans of exactly one trace
+        "413":
+          description: The request body is larger than 16 MiB.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "415":
+          description: Content-Type is not application/x-protobuf or application/json.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: No root span has a question (`input.value`) and an answer (`output.value`); an `AGENT` root without an answer is scored with an empty one.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: 'trace is not scorable: root span "GET /users" has no input.value'
   /healthz:
     get:
       tags: [health]
@@ -259,6 +322,12 @@ components:
             the trace (agents.models in the config); an agent with no model
             of its own, or no agent, gets the default model.
           example: support-bot
+        system_prompt:
+          type: string
+          description: >-
+            The instructions the agent ran under (its system prompt), so the
+            model can judge the run against them. Optional; shown to the model
+            cut to 8000 characters.
         question:
           type: string
           minLength: 1
@@ -268,6 +337,21 @@ components:
           description: Tool calls the agent made, in order.
           items:
             $ref: "#/components/schemas/ToolCall"
+        conversation:
+          type: array
+          description: >-
+            The user's and agent's turns, in order. Optional; the action
+            checks read it to see what the agent said, such as a request it
+            declined.
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role:
+                type: string
+                enum: [user, assistant]
+              content:
+                type: string
         evidence:
           type: array
           description: |
@@ -294,6 +378,11 @@ components:
           description: Outcome of the call.
           default: ok
           example: ok
+        output:
+          type: string
+          description: >-
+            What the call returned, as text. Optional. Shown to models set to
+            scorer.evidence grounded, on the call's line; ignored otherwise.
     Accepted:
       type: object
       required: [trace_id]
@@ -304,7 +393,7 @@ components:
           example: c68863b8105c8e95f34eba6666e18d91
     Decision:
       type: object
-      required: [trace_id, agent, decision, p_keep, rule, reason, model, latency_ms, exported]
+      required: [trace_id, agent, decision, p_keep, severity, rule, reason, model, latency_ms, exported]
       properties:
         trace_id:
           type: string
@@ -320,16 +409,20 @@ components:
           nullable: true
           minimum: 0
           maximum: 1
-          description: The model's probability that the final answer is wrong. Null on fallback.
+          description: >-
+            The model's probability that the final answer is wrong. Null on
+            fallback, and when a keep rule decided, since the model was not
+            asked.
         rule:
           type: string
-          enum: [above_threshold, random_floor, below_threshold, fallback]
+          enum: [above_threshold, random_floor, below_threshold, fallback, keep_rule]
           description: |
             Which part of the policy decided:
             - `above_threshold`: kept because `p_keep` reached the keep threshold
             - `random_floor`: below the threshold, kept as a random sample
             - `below_threshold`: below the threshold and not sampled; dropped
             - `fallback`: the model could not score it; kept or dropped at random
+            - `keep_rule`: a heuristic rule with `on_fail: keep` fired; kept without asking the model
         reason:
           type: string
           description: >-
@@ -357,6 +450,63 @@ components:
         exported:
           type: boolean
           description: The trace was kept and queued for export to at least one back end, which receives it moments later. A failed send is retried and dead-lettered after max_deliver tries.
+        answers:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+          description: Every yes/no answer the model gave, by question. Omitted on fallback.
+          example:
+            answer_wrong: 0.93
+            unsupported_answer: 0.71
+        flags:
+          type: array
+          items:
+            type: string
+          description: The deciding questions whose answer reached their threshold, in priority order. Omitted when there are none.
+          example: [answer_wrong, unsupported_answer]
+        severity:
+          type: number
+          format: double
+          nullable: true
+          minimum: 0
+          maximum: 1
+          description: >-
+            The deciding questions' average answer: the order to review traces in, highest first.
+            A trace several checks doubt ranks above one a single check is sure of. Each signal
+            rule counts in the average too, 1 when it fired and 0 when not. 1 when a keep rule
+            decided. Null on fallback.
+        rules:
+          type: array
+          description: >-
+            The heuristic rules that fired, in the config's order. Omitted
+            when none did.
+          items:
+            type: object
+            required: [name, on_fail, reason]
+            properties:
+              name:
+                type: string
+              on_fail:
+                type: string
+                enum: [keep, signal]
+                description: "`keep`: the rule kept the trace. `signal`: it raised the trace's severity only."
+              reason:
+                type: string
+                description: What the trace broke, in plain English.
+          example:
+            - name: answer_json
+              on_fail: keep
+              reason: The final answer is not valid JSON.
+        input_tokens:
+          type: integer
+          description: The input tokens the model reported billing for the call. Omitted if it reported none, and on fallback.
+          example: 410
+        trimmed:
+          type: boolean
+          description: >-
+            True when the trace was too long for the model, so the middle of
+            its longest fields was cut before scoring. Omitted otherwise.
     Status:
       type: object
       required: [status]

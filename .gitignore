@@ -39,3 +39,9 @@ dist/
 __pycache__/
 .release-*.md
 .DS_Store
+
+# Benchmark harness: dataset cache (TRAIL is evaluation-only and must never be
+# committed or reshared), score cache, results and the virtualenv.
+bench/.cache/
+bench/results/
+bench/.venv/

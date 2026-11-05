@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tecnosam/tailwise/internal/pipeline"
+	"github.com/tecnosam/tailwise/internal/rules"
 	"github.com/tecnosam/tailwise/internal/trace"
 	"gopkg.in/yaml.v3"
 )
@@ -64,6 +65,7 @@ func TestOpenAPICoversRoutes(t *testing.T) {
 	}{
 		{"post", "/v1/traces", []string{"202", "400", "413", "503"}},
 		{"post", "/v1/traces:score", []string{"200", "400", "413"}},
+		{"post", "/v1/otlp/traces:score", []string{"200", "400", "413", "415", "422"}},
 		{"get", "/healthz", []string{"200"}},
 		{"get", "/readyz", []string{"200", "503"}},
 	}
@@ -88,13 +90,24 @@ func TestOpenAPICoversRoutes(t *testing.T) {
 }
 
 // The Decision schema lists exactly the fields the sync path returns, the
-// optional cause included.
+// optional ones included.
 func TestOpenAPIDecisionMatchesResult(t *testing.T) {
-	withCause := &fakeScorer{score: func(context.Context, trace.State) (pipeline.Score, error) {
-		return pipeline.Score{P: 0.9, Model: "m", Cause: "incomplete", Explanation: "The final answer leaves out part of what the question asked."}, nil
+	everything := &fakeScorer{score: func(context.Context, trace.State) (pipeline.Score, error) {
+		answers := map[string]pipeline.Probability{"answer_wrong": 0.9}
+		return pipeline.Score{P: 0.9, Model: "m", Cause: "incomplete", Explanation: "The final answer leaves out part of what the question asked.",
+			Answers: answers, Deciding: answers, InputTokens: 410}, nil
 	}}
-	h := newHarness(t, harnessOpts{scorer: withCause})
-	w := h.do("POST", "/v1/traces:score", `{"question": "q", "final_answer": "a"}`)
+	// A signal rule the long answer breaks, so the response lists it.
+	tooLong, err := rules.New([]rules.Config{{Name: "short", FinalAnswer: &rules.Text{MaxLength: 100}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := pipeline.SingleModel(pipeline.Model{Name: "m", Scorer: everything, Rules: tooLong,
+		Checks: []pipeline.Check{{Question: "answer_wrong"}}})
+	h := newHarness(t, harnessOpts{scorer: everything, models: models})
+	// An answer too long for the model, so the response is marked trimmed.
+	long := strings.Repeat("a", trace.MaxStateChars)
+	w := h.do("POST", "/v1/traces:score", `{"question": "q", "final_answer": "`+long+`"}`)
 	got := decodeBody[map[string]any](t, w)
 
 	schema := parseSpec(t, openAPISpec).Components.Schemas["Decision"]

@@ -51,6 +51,7 @@ func TestDecodeErrors(t *testing.T) {
 		{"wrong type", `{"question": 5, "final_answer": "a"}`, "invalid JSON"},
 		{"evidence not strings", `{"question": "q", "final_answer": "a", "evidence": [1]}`, "invalid JSON"},
 		{"tool call without name", `{"question": "q", "final_answer": "a", "tool_calls": [{"args": "x"}]}`, "tool_calls[0].name is required"},
+		{"conversation turn with another role", `{"question": "q", "final_answer": "a", "conversation": [{"role": "tool", "content": "x"}]}`, "conversation[0].role must be user or assistant"},
 		{"trailing data", `{"question": "q", "final_answer": "a"} {}`, "unexpected data"},
 		{"array", `[]`, "invalid JSON"},
 		{"agent too long", `{"question": "q", "final_answer": "a", "agent": "` + strings.Repeat("x", MaxAgentLength+1) + `"}`, "agent is longer than 128 bytes"},
@@ -90,5 +91,33 @@ func TestNewID(t *testing.T) {
 	}
 	if a == b {
 		t.Error("two generated IDs are equal")
+	}
+}
+
+func TestDecodeSystemPrompt(t *testing.T) {
+	tr, err := Decode(strings.NewReader(`{"system_prompt": "Be kind.", "question": "q", "final_answer": "a"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(BuildState(tr)); !strings.HasPrefix(got, "SYSTEM PROMPT:\nBe kind.\n\nUSER QUESTION:\nq") {
+		t.Errorf("state = %q", got)
+	}
+}
+
+// Without a system prompt the section is left out: the state is exactly what
+// it was before system prompts existed.
+func TestBuildStateWithoutSystemPrompt(t *testing.T) {
+	got := string(BuildState(Trace{Question: "q", FinalAnswer: "a"}))
+	if !strings.HasPrefix(got, "USER QUESTION:\nq") || strings.Contains(got, "SYSTEM PROMPT") {
+		t.Errorf("state = %q", got)
+	}
+}
+
+func TestBuildStateCutsTheSystemPrompt(t *testing.T) {
+	long := strings.Repeat("é", MaxSystemPromptChars+50)
+	got := string(BuildState(Trace{SystemPrompt: long, Question: "q", FinalAnswer: "a"}))
+	want := "SYSTEM PROMPT:\n" + strings.Repeat("é", MaxSystemPromptChars) + "\n\nUSER QUESTION:"
+	if !strings.HasPrefix(got, want) {
+		t.Errorf("system prompt not cut to %d code points", MaxSystemPromptChars)
 	}
 }

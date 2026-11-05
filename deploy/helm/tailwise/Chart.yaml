@@ -4,8 +4,8 @@ description: >-
   Tailwise inference engine: scores LLM agent traces with a System One
   model (Jev by default) and exports the ones worth reviewing over OTLP.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
 keywords: [observability, opentelemetry, llm, agents, evaluation]
 dependencies:
   - name: nats
